@@ -1,0 +1,39 @@
+Depth Anything V2 installation for RPI5 used
+
+1.) Go to https://github.com/DepthAnything/Depth-Anything-V2?tab=readme-ov-file#pre-trained-models
+
+2.) Download Pre Trained Models, any of that..
+
+3.) in the Rpi Terminal, copy and paste this to install...
+
+git clone https://github.com/DepthAnything/Depth-Anything-V2
+cd Depth-Anything-V2
+pip install -r requirements.txt
+
+4.) Depth-Anything-V2 Folder will appear in your File Manager,
+ Move your depth_anything_v2_vits.pth file inside the new Depth-Anything-V2 folder that was just created.
+
+5.) Also in this github file, download the convert.py and live_depth.py then
+put it as well in the Depth-Anything-V2 Folder
+
+6.) In Thonny..
+Go to Tools > Manage packages...
+Search for onnxscript and click Install.
+Search for onnx (just the word "onnx") and click Install (if not already installed).
+also...
+Install onnxruntime (if not installed yet).
+Install opencv-python (if not installed yet).
+
+7.) Then now in thonny, run first the convert.py to change the depth_anything_v2_vits.pth
+into depth_anything_v2_vits.onnx good for Rpi5 system.
+
+8.) lastly run the live_depth.py to show the video feed...
+
+
+####NOTE#####
+In my case using only Rpi5 with 8gb RAM is still lagging with 2-3fps so I think
+by using a Rpi AI HAT+ 26 TOPS will make this run more smoother and faster.
+
+
+
+
