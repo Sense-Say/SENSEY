@@ -9,3 +9,16 @@ Here's how:
 3) In the "Name your file" input box type the folder name + "/" (slash symbol) + the new filename (anything works, like dummy, keep, etc.), e.g.
 
 EXPECTED OUTPUT Name file: new-folder/dummy
+
+
+
+
+
+https://github.com/hailo-ai/hailo-apps-infra?tab=readme-ov-file
+
+hailortcli fw-control identify
+
+
+dpkg -l | grep hailo
+
+sudo apt install -y hailo-all
