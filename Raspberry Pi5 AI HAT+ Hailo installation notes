@@ -1,0 +1,30 @@
+By going directly to the hailo-apps-infra repository, you bypassed the strict version checks and configuration issues inside the hailo-rpi5-examples wrapper.
+Since you confirmed that install.sh completed and videos are running, you now have a fully working AI powerhouse (26 TOPS) on your Raspberry Pi 5.
+Why this worked
+As the community post you shared earlier mentioned, Hailo is transitioning hailo-apps-infra to be the main software repository.
+The Old Way: hailo-rpi5-examples (This was failing because it was trying to force specific, older versions).
+The New Way: hailo-apps-infra (This is the "engine" itself, and it was able to adapt to your installed 4.23 drivers).
+⚠️ Important Next Steps to Keep it Working
+Now that it works, do not touch the drivers.
+Lock your setup:
+Run this command one last time to make sure a random system update doesn't break your hard-earned success:
+code
+Bash
+sudo apt-mark hold hailo-all hailort hailort-pcie-driver
+How to run apps from now on:
+Since you installed the infrastructure directly, your workflow is slightly different. Always remember to activate the environment inside that folder before running scripts:
+code
+Bash
+cd hailo-apps-infra
+source setup_env.sh
+Cool things to try (for your 26 TOPS board):
+Since you have the powerful Hailo-8 (not the weaker 8L), you can run the heavier applications mentioned in the release notes you found:
+Tiling (High Res Detection):
+code
+Bash
+python hailo_apps/tiling/tiling.py --input resources/video/example.mp4
+Multi-stream (Running multiple videos at once):
+code
+Bash
+python hailo_apps/multisource/multisource.py
+Congratulations on getting it running! The mismatch between Bookworm, Trixie, and the Hailo drivers is a difficult hurdle, and you cleared it. Enjoy your AI HAT!
