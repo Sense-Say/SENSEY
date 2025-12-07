@@ -1,1 +1,59 @@
+========================================================================
+1.) The First thing I do is to install a DEBIAN BOOKWORM LEGACY FULL version because if i use DEBIAN TRIXIE, which is right now in this date DEC2025, still new and still prone to error.
+Also another reason is that since I will be using HAILO8 AI HAT for RPI5, i would be need to specifically use this github repository https://github.com/hailo-ai/hailo-rpi5-examples which only support DEBIAN BOOKWORM.
+On the otherhand this repository https://github.com/hailo-ai/hailo-apps-infra/tree/main, support DEBIAN TRIXIE.
+
+
+
+
+2.) After Installation of OS in sd card, proceed on following this guide. https://core-electronics.com.au/guides/raspberry-pi/yolo-pose-estimation-on-the-raspberry-pi-hat-writing-custom-python-code/#X2V2KAI
+
+# Now whenever you exit the terminal, you should always do this
+cd hailo-rpi5-examples
+source setup_env.sh
+
+
+
+
+3.) Next thing I do is to try using Thonny instead of running in terminal only.
+Here I first run the pose_estimation.py, which I send here but also you can find in this location /home/raspberrypi/hailo-rpi5-examples/basic_pipelines.
+
+# As a note, you neet to set the interpreter in thonny by doing this.
+Open Thonny > Run > Configure Interpreter > then one by one follow this folder until you click the last file which is "python3" (/home/raspberrypi/hailo-rpi5-examples/venv_hailo_rpi_examples/bin/python3).
+
+
+
+
+
+4.) Now through coding I have accomplish the action logic 1st progress.py and pose estimation 1st progress.py. I will not explain the construction of this code, let AI do that hhaha.
+In short, I want to recognize the pose of Standing, Walking, and Raising Hand.
+
+if you want to play your own video or your usb camera, just revise this specific code.....
+   # 1. Set Camera Input
+        print("Setting input to /dev/video0")
+        sys.argv.extend(["--input", "/dev/video0"])
+
+
+Beside the --input which is the "/dev/video0", this is the one you will replace.
+
+# If you want to use your own video, first go the the video you have in your file manager> COPY PATH > then replace this dev/video0 and CTRL+V inside the " ".
+# IF you want to play again the usb camera, just put again dev/video0 or specifically  usb.
+
+
+
+
+
+
+5.) Now in the final code I have done, what change is that.
+    a) I have use a Yolov8m_pose model using this...
+    HEF_PATH = "/home/raspberrypi/hailo-rpi5-examples/resources/models/hailo8/yolov8m_pose.hef"
+       # to find this yolov8m_pose.hef, just follow this and open the folder one by one (/home/raspberrypi/hailo-rpi5-examples/resources/models/hailo8/yolov8m_pose.hef) then COPY PATH, with that you are using YOLOv8 pose model.
+   
+    b) add this sys.argv.extend(["--disable-sync"]) and this sys.argv.extend(["--frame-rate", str(DESIRED_FPS)]), to make the processing of video or live feed faster and managable.
+
+
+
+
+
+
 
