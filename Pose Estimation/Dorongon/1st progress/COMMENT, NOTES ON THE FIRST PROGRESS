@@ -50,7 +50,7 @@ Beside the --input which is the "/dev/video0", this is the one you will replace.
 
 
 
-5.) Now in the final code I have done, what change is that.
+5.) Now in the final code I have done which is 1stProgressFinalPoseEstimation.py and 1stProgressFinal_Action_Logic.py, what change is that.
     a) I have use a Yolov8m_pose model using this...
     HEF_PATH = "/home/raspberrypi/hailo-rpi5-examples/resources/models/hailo8/yolov8m_pose.hef"
        # to find this yolov8m_pose.hef, just follow this and open the folder one by one (/home/raspberrypi/hailo-rpi5-examples/resources/models/hailo8/yolov8m_pose.hef) then COPY PATH, with that you are using YOLOv8 pose model.
