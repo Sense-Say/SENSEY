@@ -14,11 +14,3 @@ EXPECTED OUTPUT Name file: new-folder/dummy
 
 
 
-https://github.com/hailo-ai/hailo-apps-infra?tab=readme-ov-file
-
-hailortcli fw-control identify
-
-
-dpkg -l | grep hailo
-
-sudo apt install -y hailo-all
