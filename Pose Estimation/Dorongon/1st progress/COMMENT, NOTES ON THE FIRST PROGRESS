@@ -1,7 +1,5 @@
 
-
 ========================================================================
-
 
 
 1.) The First thing I do is to install a DEBIAN BOOKWORM LEGACY FULL version because if i use DEBIAN TRIXIE, which is right now in this date DEC2025, still new and still prone to error.
@@ -14,24 +12,27 @@ On the otherhand this repository https://github.com/hailo-ai/hailo-apps-infra/tr
 2.) After Installation of OS in sd card, proceed on following this guide. https://core-electronics.com.au/guides/raspberry-pi/yolo-pose-estimation-on-the-raspberry-pi-hat-writing-custom-python-code/#X2V2KAI
 
 # Now whenever you exit the terminal, you should always do this
-cd hailo-rpi5-examples
-source setup_env.sh
+   cd hailo-rpi5-examples
+   source setup_env.sh
 
+# Code to see IF YOU PROPERLY INSTALL THE AI HAT MODULE
+   hailortcli fw-control identify
+   dpkg -l | grep hailo
 
 
 
 3.) Next thing I do is to try using Thonny instead of running in terminal only.
-Here I first run the pose_estimation.py, which I send here but also you can find in this location /home/raspberrypi/hailo-rpi5-examples/basic_pipelines.
+    Here I first run the pose_estimation.py, which I send here but also you can find in this location /home/raspberrypi/hailo-rpi5-examples/basic_pipelines.
 
 # As a note, you neet to set the interpreter in thonny by doing this.
-Open Thonny > Run > Configure Interpreter > then one by one follow this folder until you click the last file which is "python3" (/home/raspberrypi/hailo-rpi5-examples/venv_hailo_rpi_examples/bin/python3).
+    Open Thonny > Run > Configure Interpreter > then one by one follow this folder until you click the last file which is "python3" (/home/raspberrypi/hailo-rpi5-examples/venv_hailo_rpi_examples/bin/python3).
 
 
 
 
 
 4.) Now through coding I have accomplish the action logic 1st progress.py and pose estimation 1st progress.py. I will not explain the construction of this code, let AI do that hhaha.
-In short, I want to recognize the pose of Standing, Walking, and Raising Hand.
+    In short, I want to recognize the pose of Standing, Walking, and Raising Hand.
 
 if you want to play your own video or your usb camera, just revise this specific code.....
    # 1. Set Camera Input
@@ -89,6 +90,7 @@ options:
   --dump-dot            Dump the pipeline graph to a dot file pipeline.dot
   --frame-rate FRAME_RATE, -r FRAME_RATE
                         Frame rate of the video source. Default is 30.
+
 
 
 
