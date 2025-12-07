@@ -37,7 +37,7 @@ try:
     importlib.reload(action_logic)
     from action_logic import StudentActionMonitor
 except ImportError:
-    print(f"\n❌ ERROR: Could not import 'action_logic.py'.")
+    print(f"\n❌ ERROR: Could not import '1stProgressFinal_Action_Logic.py'.")
     sys.exit(1)
 
 import gi
