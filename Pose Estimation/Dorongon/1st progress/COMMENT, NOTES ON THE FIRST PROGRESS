@@ -1,4 +1,9 @@
+
+
 ========================================================================
+
+
+
 1.) The First thing I do is to install a DEBIAN BOOKWORM LEGACY FULL version because if i use DEBIAN TRIXIE, which is right now in this date DEC2025, still new and still prone to error.
 Also another reason is that since I will be using HAILO8 AI HAT for RPI5, i would be need to specifically use this github repository https://github.com/hailo-ai/hailo-rpi5-examples which only support DEBIAN BOOKWORM.
 On the otherhand this repository https://github.com/hailo-ai/hailo-apps-infra/tree/main, support DEBIAN TRIXIE.
@@ -52,6 +57,38 @@ Beside the --input which is the "/dev/video0", this is the one you will replace.
     b) add this sys.argv.extend(["--disable-sync"]) and this sys.argv.extend(["--frame-rate", str(DESIRED_FPS)]), to make the processing of video or live feed faster and managable.
 
 
+
+
+=================================================================================================================================
+
+
+HAILO CODE COMPILATION THAT WILL HELP YOU
+
+Hailo App Help
+
+options:
+  -h, --help            show this help message and exit
+  --input INPUT, -i INPUT
+                        Input source. Can be a file, USB (webcam), RPi camera
+                        (CSI camera module) or ximage. For RPi camera use '-i
+                        rpi' For automatically detect a connected usb camera,
+                        use '-i usb' For manually specifying a connected usb
+                        camera, use '-i /dev/video<X>' Defaults to application
+                        specific video.
+  --use-frame, -u       Use frame from the callback function
+  --show-fps, -f        Print FPS on sink
+  --arch {hailo8,hailo8l,hailo10h}
+                        Specify the Hailo architecture (hailo8 or hailo8l or
+                        hailo10h). Default is None , app will run check.
+  --hef-path HEF_PATH   Path to HEF file
+  --disable-sync        Disables display sink sync, will run as fast as
+                        possible. Relevant when using file source.
+  --disable-callback    Disables the user's custom callback function in the
+                        pipeline. Use this option to run the pipeline without
+                        invoking the callback logic.
+  --dump-dot            Dump the pipeline graph to a dot file pipeline.dot
+  --frame-rate FRAME_RATE, -r FRAME_RATE
+                        Frame rate of the video source. Default is 30.
 
 
 
