@@ -164,7 +164,7 @@ This is the "instruction manual" that tells the Pi to start your script at boot.
 sudo nano /etc/systemd/system/lcd_monitor.service
 
 2.Paste this exact configuration:
-Unit]
+[Unit]
 Description=Raspberry Pi 5 LCD Monitor
 After=multi-user.target
 
