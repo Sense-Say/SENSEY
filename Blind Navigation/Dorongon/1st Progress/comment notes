@@ -1,1 +1,68 @@
+📝 Hailo RPi5 Development: Master Reference Guide
 
+
+1. The Development Environment
+Location matters: Your scripts should ideally live near or reference the hailo-rpi5-examples folder.
+The Virtual Env: You must always activate the environment before running a script:
+cd /home/raspberrypi/hailo-rpi5-examples
+source setup_env.sh
+
+External Scripts: If your script is in a custom folder (like SENSEY/...), you must tell Python where the Hailo libraries are inside the code:
+import sys
+sys.path.append("/home/raspberrypi/hailo-rpi5-examples")
+
+
+2. GStreamer App Logic (The Pipeline)
+user_app_callback_class: Use this to store variables that need to persist (like last_print_time or custom counters).
+app_callback: This function runs for every frame.
+Don't use cv2.imshow: It will crash the pipeline.
+Use user_data.set_frame(frame): This sends your modified OpenCV frame back to the GStreamer display sink.
+
+Flags in sys.argv: To see your custom drawings (like lines), you must include:
+--use-frame: Enables Python-side frame processing.
+--disable-sync: Prevents lag when using USB cameras or heavy drawing.
+
+
+3. Triple Column Detection Logic
+To detect objects in Left, Center, or Right columns without "double-counting":
+The Midpoint Rule: Calculate the horizontal center of the bounding box:
+mid_x = (bbox.xmin() + bbox.xmax()) / 2
+The 33% Threshold:
+mid_x < 0.33 → Left
+mid_x < 0.66 → Center
+else → Right
+Benefit: This ensures that even if an object is touching two columns, it is only assigned to the one where the majority (50%+) of its body is located.
+
+
+4. Output Formatting (Pose-Estimation Style)
+To keep the terminal clean, use a timer to print every 0.5s:
+Format: FPS:XX | [Label] on [Column] || Status: [ID:Code]
+Code: Use ID1:L, ID2:C, ID3:R for quick status scanning.
+
+
+5. Hardware Troubleshooting (Error 74)
+The error HAILO_OUT_OF_PHYSICAL_DEVICES means the chip is locked or crashed.
+The #1 Cause: Closing the live video window by clicking the 'X' button. This leaves the driver "in use."
+The Safe Way: Always click the terminal and press Ctrl + C to stop.
+The "Soft" Fix: Kill ghost processes:
+
+sudo pkill -9 -f python
+The "Hard" Fix: If the driver is stuck (Module hailo_pci is in use):
+sudo shutdown -h now
+Physically unplug power for 10 seconds.
+Plug back in and boot.
+
+
+6. Useful Terminal Commands
+Command	Purpose
+hailortcli scan	Checks if the Pi sees the AI Hat.
+hailortcli fw-control identify	Checks if the AI Hat firmware is responding.
+ls /dev/hailo0	Verifies the device node exists in Linux.
+sudo lsof /dev/hailo0	Shows exactly which process is currently using the chip.
+
+
+7. Code Maintenance
+HEF Paths: Ensure your path to the .hef model is absolute and correct.
+Input: Set VIDEO_PATH = "usb" for the official camera/webcam, or provide the full path to a .mp4/.mov file.
+Color Space: Remember that Hailo buffers are RGB, but OpenCV uses BGR. Always convert before drawing:
+frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
