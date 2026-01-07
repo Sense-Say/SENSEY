@@ -1,3 +1,7 @@
+# Code with visible Partition Line of Left, Center,Right
+
+
+
 import sys
 import os
 import time
