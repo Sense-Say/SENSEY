@@ -55,70 +55,74 @@ def app_callback(pad, info, user_data):
     detections = roi.get_objects_typed(hailo.HAILO_DETECTION)
 
     # ---------------------------------------------------------
-    # TERMINAL OUTPUT LOGIC (0.5s interval)
+    # COLUMN LOGIC & TERMINAL PRINTING
     # ---------------------------------------------------------
     current_time = time.time()
     elapsed_since_print = current_time - user_data.last_print_time
 
+    # We process the descriptions every frame to draw, but only print every 0.5s
     detection_reports = []
-    status_list = []
-
+    
     for detection in detections:
         label = detection.get_label()
         bbox = detection.get_bbox()
+        
+        # Calculate horizontal midpoint (normalized 0.0 to 1.0)
+        # Using the midpoint ensures the "majority area" rule (if midpoint is in col, >50% is in col)
         mid_x = (bbox.xmin() + bbox.xmax()) / 2
         
-        # Column Logic
         if mid_x < 0.33:
-            column, col_code = "right", "R"
+            column = "left"
         elif mid_x < 0.66:
-            column, col_code = "center", "C"
+            column = "center"
         else:
-            column, col_code = "left", "L"
+            column = "right"
             
         detection_reports.append(f"{label} on {column}")
-        
-        # Track ID for Status
-        track_id = 0
-        track = detection.get_objects_typed(hailo.HAILO_UNIQUE_ID)
-        if len(track) == 1: track_id = track[0].get_id()
-        status_list.append(f"ID{track_id}:{col_code}")
 
+    # Terminal Output every 0.5 seconds
     if elapsed_since_print >= 0.5:
         frames_since_last_print = user_data.get_count() - user_data.frame_count_at_last_print
         fps = int(frames_since_last_print / elapsed_since_print)
+
+        # Format: FPS:15 | Person on left | Chair on center || Status: [...]
         report_str = " | ".join(detection_reports) if detection_reports else "Clear"
-        print(f"FPS:{fps} | {report_str} || Status: {status_list}")
         
+        # Short Status Codes (ID:ColumnIndex) - L=Left, C=Center, R=Right
+        status_list = []
+        for detection in detections:
+            track_id = 0
+            track = detection.get_objects_typed(hailo.HAILO_UNIQUE_ID)
+            if len(track) == 1: track_id = track[0].get_id()
+            
+            # Map column to a single letter for Status list
+            mid_x = (detection.get_bbox().xmin() + detection.get_bbox().xmax()) / 2
+            col_code = "L" if mid_x < 0.33 else "C" if mid_x < 0.66 else "R"
+            status_list.append(f"ID{track_id}:{col_code}")
+
+        print(f"FPS:{fps} | {report_str} || Status: {status_list}")
+
+        # Reset timers
         user_data.last_print_time = current_time
         user_data.frame_count_at_last_print = user_data.get_count()
 
     # ---------------------------------------------------------
-    # DRAWING LOGIC (Show lines on the screen)
+    # DRAWING LOGIC
     # ---------------------------------------------------------
-    # IMPORTANT: user_data.use_frame must be True (enabled by --use-frame flag)
     if user_data.use_frame and format is not None:
         frame = get_numpy_from_buffer(buffer, format, width, height)
         if frame is not None:
-            # Convert RGB to BGR for OpenCV
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             
-            # Draw Column Dividers (Thickened to 2 for visibility)
-            cv_width = frame.shape[1]
-            cv_height = frame.shape[0]
-            line1_x = int(cv_width * 0.33)
-            line2_x = int(cv_width * 0.66)
+            # Draw Column Dividers (2 Vertical Lines)
+            cv2.line(frame, (int(width * 0.33), 0), (int(width * 0.33), height), (255, 255, 255), 1)
+            cv2.line(frame, (int(width * 0.66), 0), (int(width * 0.66), height), (255, 255, 255), 1)
             
-            # Draw Lines (Color: Green, Thickness: 2)
-            cv2.line(frame, (line1_x, 0), (line1_x, cv_height), (0, 255, 0), 2)
-            cv2.line(frame, (line2_x, 0), (line2_x, cv_height), (0, 255, 0), 2)
-            
-            # Add text labels on the screen
-            cv2.putText(frame, "RIGHT", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(frame, "CENTER", (line1_x + 20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(frame, "LEFT", (line2_x + 20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            # Add Column Labels
+            cv2.putText(frame, "LEFT", (10, height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, "CENTER", (int(width * 0.45), height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, "RIGHT", (int(width * 0.85), height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            # This pushes our drawn frame back to the Hailo display window
             user_data.set_frame(frame)
 
     return Gst.PadProbeReturn.OK
@@ -128,25 +132,19 @@ def app_callback(pad, info, user_data):
 # -----------------------------------------------------------------------------------------------
 def main():
     HEF_PATH = "/home/raspberrypi/hailo-rpi5-examples/resources/models/hailo8/yolov8m.hef"
-    VIDEO_PATH = "usb" 
+    VIDEO_PATH = "usb" # Change to file path if needed
 
     if not os.path.exists(HEF_PATH):
         print(f"Error: HEF file not found at {HEF_PATH}")
         return
     
-    # -----------------------------------------------------------
-    # CRITICAL: We added "--use-frame" to enable OpenCV drawing
-    # We added "--disable-sync" to keep the video smooth
-    # -----------------------------------------------------------
     sys.argv = [
         sys.argv[0],
         "--input", VIDEO_PATH,
         "--hef-path", HEF_PATH,
-        "--use-frame",      # Enables Python processing/drawing
-        "--disable-sync"    # Improves display speed for USB cameras
     ]
 
-    print("Starting Triple Column Detection with Visual Lines...")
+    print("Starting Triple Column Detection...")
     user_data = user_app_callback_class()
     app = GStreamerDetectionApp(app_callback, user_data)
     app.run()
