@@ -1,104 +1,80 @@
+
+
+***
+
 # Vision-Assist: Hybrid AI for Raspberry Pi 5
 
-A revolutionary assistive technology project that combines high-speed computer vision with a local Large Language Model (LLM). This system is specifically designed for the **Raspberry Pi 5** and the **Hailo-8 AI Accelerator** to help blind users navigate and teachers monitor classroom behavior.
+An advanced assistive technology project that combines real-time computer vision with a local Large Language Model (LLM). This system is designed to help blind users navigate and teachers monitor classroom behavior using the **Raspberry Pi 5** and **Hailo-8 AI Accelerator**.
 
-## Project Concept
-This project utilizes a "Fast-and-Slow" AI architecture. The **Hailo-8** chip handles survival-critical, real-time detection at 15-30 FPS, while a local **Ollama (Qwen2)** model provides high-level scene descriptions only when requested by the user.
+## Hardware Overview
 
-## Key Features
-- **Blind Navigation:** Spatial 3-column detection (Left, Center, Right) with majority-area logic.
-- **Classroom Monitor:** Real-time pose estimation to detect *Standing, Walking, and Hand Raising*.
-- **Ask AI Button:** Converts technical system logs into a natural human sentence using Qwen2-0.5B.
-- **Soft Pause Logic:** An innovative resource-management system that prevents power crashes during heavy AI tasks.
-- **Tactile Design:** Full hardware control using an industrial 3-way rotary switch and tactile buttons.
+| Component | Specification | Purpose |
+| :--- | :--- | :--- |
+| **SBC** | Raspberry Pi 5 | Main processing unit |
+| **AI Kit** | Hailo-8L (13 TOPS) | Real-time object and pose detection |
+| **Camera** | USB Webcam | Visual input for the AI models |
+| **UPS** | Waveshare 3S | Portable power management |
+| **Audio** | Speaker/Headphones | Voice feedback for the user |
 
-## Hardware Requirements
+## Pin Configuration
 
-| Component | Specification |
-| :--- | :--- |
-| **SBC** | Raspberry Pi 5 (4GB/8GB) |
-| **AI Accelerator** | Raspberry Pi AI Kit (Hailo-8L) |
-| **Power Supply** | Waveshare UPS 3S or 5V/5A Adapter |
-| **Switch** | 3-Position Rotary or Toggle Switch (ON-OFF-ON) |
-| **Button** | Momentary Push Button (Tactile) |
-| **Audio** | Speaker or Headphones (via 3.5mm or USB) |
+Use the following GPIO mapping for the 3-way rotary switch and the "Ask AI" push button.
 
-## GPIO Wiring Map
-
-| Connection | GPIO Pin | Physical Pin | Mode/Action |
+| Device | GPIO Pin | Physical Pin | Mode/Action |
 | :--- | :--- | :--- | :--- |
-| Switch (Left/Up) | GPIO 17 | Pin 11 | Student Behavior Mode |
-| Switch (Center) | — | Pin 9 | Standby (GND) |
-| Switch (Right/Down) | GPIO 22 | Pin 15 | Blind Navigation Mode |
-| Push Button | GPIO 27 | Pin 13 | "Ask AI" Scene Description |
+| Switch Pos 1 | GPIO 17 | Pin 11 | Classroom Monitor Mode |
+| Switch Pos 2 | — | Pin 9 | Standby (GND) |
+| Switch Pos 3 | GPIO 22 | Pin 15 | Blind Navigation Mode |
+| Push Button | GPIO 27 | Pin 13 | Trigger AI Scene Description |
 
 ## Installation
 
-### 1. Setup Hailo Environment
+Follow these steps to set up the environment on your Raspberry Pi 5.
 
-**Update system and install dependencies**
-```
+### 1. Hailo Environment Setup
+```bash
+# Install core Hailo software
 sudo apt update && sudo apt install hailo-all espeak-ng mpg123
-```
-
-**Clone the official RPi5 examples**
-```
+# Clone and setup the environment
 git clone https://github.com/hailo-ai/hailo-rpi5-examples.git
 cd hailo-rpi5-examples
 ./install.sh
 source setup_env.sh
-./download_resources.sh
 ```
 
-### 2. Setup Local LLM (Ollama)
-
- **Install Ollama service**
-```
+### 2. Local LLM Setup (Ollama)
+```bash
+# Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
-```
- **Pull the ultra-lightweight Qwen model**
-```
+# Pull the lightweight Qwen model
 ollama pull qwen2:0.5b
 pip install ollama
 ```
 
-# The "Soft Pause" Innovation
-**Running Vision pipelines and LLMs simultaneously on a Raspberry Pi 5 can trigger PSU Low Voltage warnings and system instability due to high current draw (4A-5A). To solve this, this project implements a Soft Pause:**
+## Logic Overview: The "Soft Pause"
 
- **1.Trigger:** User presses the "Ask AI" button.
- 
- **2.Signal:** The controller creates a temporary flag file at /tmp/hailo_pause.
- 
- **3. Throttling:** The vision scripts detect this file and instantly skip heavy CPU tasks like OpenCV color conversion and text drawing.
- 
- **4. Inference:** The CPU overhead is cleared, allowing Ollama to process the summary using the filtered logs.
- 
- **5. Resume:** Once the AI finishes speaking, the flag is removed and the video feed resumes drawing and processing at full speed.
+One of the revolutionary features of this project is the **Soft Pause** mechanism. Running a 30 FPS vision pipeline alongside a Large Language Model can draw over 5 Amps of current, causing power failure.
 
+- **The Trigger:** When the "Ask AI" button is pressed, the controller creates a flag file at `/tmp/hailo_pause`.
+- **The Throttling:** The vision script detects this file and immediately skips high-CPU tasks (OpenCV drawing and color conversion).
+- **The Result:** CPU overhead is cleared for **Ollama** to generate a summary in 1-3 seconds without crashing the power supply.
 
-## How to Run
-**1. Navigate to your workspace**
-```
-cd ~/hailo-rpi5-examples
-source setup_env.sh
-```
-**2. Start the Master Controller**
-```
-python askaicontroller.py
-```
-**3. Operation**
+## Usage
 
-**Turn the Rotary Switch** to select a mode (Behavior or Navigation).
+1. **Start the Master Controller:**
+   ```bash
+   source setup_env.sh
+   python askaicontroller.py
+   ```
+2. **Select Mode:** Turn the rotary switch to enter a specific AI mode.
+3. **Hardware Reset:** When switching, the system enforces a 5-second "Nuclear Cleanup" to release the Hailo PCIe bus safely.
+4. **Ask AI:** Press the tactile button at any time to hear a natural language description of the current scene.
 
-**Press the Tactile Button** to hear a natural language scene description.
+## Troubleshooting
 
-**Move the switch** to the Center to release the Hailo chip and enter standby.
+- **Status 74 Error:** If you see `HAILO_OUT_OF_PHYSICAL_DEVICES`, wait for the 5-second reset period. Do not flick the switch too quickly.
+- **Low Voltage Warning:** This is expected during AI inference. The "Soft Pause" logic minimizes this, but ensure your batteries are high-discharge rated.
+- **Audio Issues:** Ensure `espeak-ng` is installed correctly for the text-to-speech feedback.
 
-# Troubleshooting
-
-**Status 74 (Device Busy):** The script includes a 5-second "Nuclear Cleanup" logic. If you switch modes too fast, simply wait for the reset period to finish to allow the PCIe bus to clear.
-
-**Low Voltage Warning:** This is common during the 2-3 seconds of AI inference. The "Soft Pause" logic minimizes this to prevent system reboots.
-
-**Ollama Error:** Ensure the Ollama service is running in the background. If the connection fails, type ollama serve in a separate terminal.
-
+---
+*Developed for the Raspberry Pi 5 AI Maker Community.*
