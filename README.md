@@ -46,7 +46,7 @@ This repository is structured to provide clear access to the various modules and
 
 To get a local copy of SENSEY's development environment and explore its components, follow these steps:
 
-1.  Clone the repository: `git clone https://github.com/poginiedward/[your-repo-name].git`
+1.  Clone the repository: `git clone https://github.com/poginiedward/SENSEY.git`
 2.  Navigate to the specific module you wish to explore (e.g., `cd Depth Estimation Model`).
 3.  Refer to the `README.md` files within individual folders or the `Hardware` folder for detailed setup, installation, and usage instructions for each component.
 
