@@ -88,8 +88,8 @@ We welcome contributions to the SENSEY project! If you have suggestions for impr
 ## 📞 Contact
 
 **Project Team:** Buco, Dogillo, Dorongon, Padre, Villariña
+
 **Adviser:** Engr. Dennis Jefferson A. Amora, PECE, LPT
-[Your Team Email Address or Individual Contact Info]
 
 Project Link: `https://github.com/poginiedward/SENSEY`
 
