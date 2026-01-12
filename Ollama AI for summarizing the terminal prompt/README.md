@@ -87,12 +87,18 @@ source setup_env.sh
 python askaicontroller.py
 ```
 **3. Operation**
+
 **Turn the Rotary Switch** to select a mode (Behavior or Navigation).
+
 **Press the Tactile Button** to hear a natural language scene description.
+
 **Move the switch** to the Center to release the Hailo chip and enter standby.
 
 # Troubleshooting
+
 **Status 74 (Device Busy):** The script includes a 5-second "Nuclear Cleanup" logic. If you switch modes too fast, simply wait for the reset period to finish to allow the PCIe bus to clear.
+
 **Low Voltage Warning:** This is common during the 2-3 seconds of AI inference. The "Soft Pause" logic minimizes this to prevent system reboots.
+
 **Ollama Error:** Ensure the Ollama service is running in the background. If the connection fails, type ollama serve in a separate terminal.
 
