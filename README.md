@@ -1,115 +1,96 @@
-# 🇵🇭 Multi-Mode AI Assistant (RPi 5 + Hailo-8)
+# SENSEY: An Intelligent Wearable Aid with Real-Time Object Detection and Multimodal Feedback for Inclusive Education
 
-A dual-purpose AI system running on Raspberry Pi 5 with the Hailo-8 accelerator.
-1.  **Blind Navigation Mode:** Object detection with Filipino voice feedback.
-2.  **Student Behavior Monitor:** Pose estimation detecting "Raising Hand", "Walking", and "Standing" with custom visuals.
+Welcome to the repository for **SENSEY**! This project is dedicated to developing an intelligent wearable aid designed to empower visually impaired teachers in inclusive education settings. SENSEY leverages cutting-edge AI-driven computer vision, specifically YOLOv8, combined with multimodal haptic and audio feedback to enhance classroom mobility, object identification, student interaction, and overall spatial awareness.
 
----
-
-## 🛠️ Hardware Requirements
-*   **Raspberry Pi 5** (8GB Recommended)
-*   **Official 27W USB-C Power Supply** (Critical for performance)
-*   **Hailo-8 / Hailo-8L M.2 HAT**
-*   **USB Camera** or RPi Camera Module
-*   **Speaker / Headphones** (3.5mm Jack)
+Our goal is to create a robust and efficient system that bridges the existing gaps in assistive technology, providing real-time, adaptive support for educators.
 
 ---
 
-## 💿 Phase 1: OS Installation (Critical)
-**Do not use the latest default OS.** This project requires specific drivers.
+## ✨ Features & Project Components
 
-1.  Open **Raspberry Pi Imager**.
-2.  Select Device: **Raspberry Pi 5**.
-3.  Select OS: **Raspberry Pi OS (Legacy, 64-bit) Bookworm**.
-    *   *Warning:* Do NOT select Trixie or "Testing".
-4.  Flash to SD Card and boot up.
+This repository is structured to provide clear access to the various modules and functionalities that comprise the SENSEY wearable aid and its underlying AI infrastructure.
+
+*   **Blind Navigation:**
+    *   This core module implements the navigation logic and processes sensory data to provide guidance for visually impaired users. It integrates outputs from perception models to offer intuitive feedback.
+
+*   **Depth Estimation Model:**
+    *   Dedicated to 3D scene understanding, this component includes models and code for estimating the depth of objects using a stereo camera. It's crucial for simulating "Human Binocular Vision" and understanding obstacle distances in the environment.
+
+*   **Face Recognition Folder:**
+    *   Focuses on the facial identification capabilities essential for SENSEY. This includes code and notes for recognizing students within the classroom environment, supporting enhanced teacher-student interaction.
+
+*   **Hardware:**
+    *   Contains detailed documentation, design files (e.g., 3D CAD for mounting cases), and setup instructions for the physical components of the SENSEY wearable device, including the Raspberry Pi 5 enclosure, stereo camera mount, and battery holder.
+
+*   **Ollama AI for summarizing the terminal prompt:**
+    *   *(Note: This component appears to be a general AI development tool for enhancing developer workflow, rather than a direct feature of the SENSEY wearable aid. It's included here as part of the broader repository's AI solutions.)* Explores integrating Ollama AI for terminal output summarization.
+
+*   **Pose Estimation Model:**
+    *   Documents the development and initial progress of the pose estimation module. This is vital for detecting and tracking student behaviors and actions in real-time within the classroom.
+
+*   **Text to Speech Folder:**
+    *   Implements the text-to-speech functionalities that drive SENSEY's audio feedback system, allowing the device to provide clear, audible information to the user.
+
+*   **WaveShare UPS Module 3S:**
+    *   Manages the integration and functionality of the WaveShare UPS Module 3S, ensuring reliable power supply and extended operational time for the portable SENSEY device.
+
+*   **README.md:**
+    *   (You are currently reading this file!) Provides a comprehensive overview of the SENSEY project, its features, and guidance for development and contribution.
+
+*   **Raspberry Pi5 AI HAT + Hailo installation notes:**
+    *   Contains essential notes and guides for setting up the Raspberry Pi 5 with an AI HAT, specifically optimized for Hailo AI accelerators to ensure efficient on-device inference for SENSEY's various AI models.
 
 ---
 
-## ⚙️ Phase 2: System Setup
+## 🚀 Getting Started
 
-Open the Terminal on your Raspberry Pi and run these commands block by block.
+To get a local copy of SENSEY's development environment and explore its components, follow these steps:
 
-### 1. Update & Config
-```bash
-sudo apt update && sudo apt full-upgrade -y
-sudo raspi-config
-# Navigate to: 6 Advanced Options -> A8 PCIe Speed -> Select "Yes" (Gen 3).
-# Finish and Reboot.
+1.  Clone the repository: `git clone https://github.com/poginiedward/[your-repo-name].git`
+2.  Navigate to the specific module you wish to explore (e.g., `cd Depth Estimation Model`).
+3.  Refer to the `README.md` files within individual folders or the `Hardware` folder for detailed setup, installation, and usage instructions for each component.
 
+---
 
-### 2. Install Hailo Drivers
-Open the terminal and install the official drivers (requires reboot).
-sudo apt install hailo-all -y
-sudo reboot
+## 🛠️ Technologies & Tools
 
-## 3. Install Hailo Infrastructure
-Download the official GStreamer pipeline tools provided by Hailo.
-git clone https://github.com/hailo-ai/hailo-apps-infra.git
-cd hailo-apps-infra
-./install.sh
+The SENSEY project leverages a diverse stack of technologies and tools:
 
-## 4. Install Project Dependencies
-We need specific audio engines and Python libraries for the Filipino voice and logic.
-# System Audio Engines
-sudo apt install espeak-ng mpg123 -y
+*   **Core AI:** YOLOv8 (for object detection, pose estimation, face recognition)
+*   **AI Accelerators:** Hailo AI HAT (on Raspberry Pi 5)
+*   **Embedded Computing:** Raspberry Pi 5
+*   **Camera System:** Stereo Camera (e.g., RealSense D435)
+*   **Haptic Feedback:** Custom ESD Arm Sleeve with Coin Vibration Motors
+*   **Audio Feedback:** Shokz OPENMOVE Bone Conduction Headphones (Text-to-Speech)
+*   **Power Management:** WaveShare UPS Module 3S
+*   **Development & Training:**
+    *   Python
+    *   Ultralytics YOLO Framework
+    *   Roboflow (Dataset management)
+    *   Google Colab (GPU-accelerated training)
+    *   OpenCV (Image and video processing)
+*   **Other AI Tools (within repository):** Ollama AI (for development utilities)
 
-# Python Libraries
-pip3 install pyttsx3 gTTS opencv-python --break-system-packages
+---
 
+## 🤝 Contributing
 
-## 📂 Phase 3: File Placement Map
-This project requires specific files to be in specific locations.
+We welcome contributions to the SENSEY project! If you have suggestions for improvements, new features, or want to report issues, please feel free to:
 
-## 1. Home Directory (/home/raspberrypi/)
-Place the following controller scripts here:
-keyboard_controller.py
-generate_voice.py
+1.  Fork the repository.
+2.  Create your feature branch (`git checkout -b feature/AmazingFeature`).
+3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
+4.  Push to the branch (`git push origin feature/AmazingFeature`).
+5.  Open a Pull Request.
 
-## 2. Logic & Media Folder
-Create the specific folder structure required by the logic script:
-mkdir -p "/home/raspberrypi/Downloads/pose estimation"
-Move action_logic.py inside: /home/raspberrypi/Downloads/pose estimation/
-Move the test video STANDING.MOV inside: /home/raspberrypi/Downloads/
+---
 
+## 📞 Contact
 
-## 3. Overwriting Hailo Apps
-Replace the default Hailo scripts with your modified versions.
-Behavior Script:
-Source: Your modified pose_estimation.py
-Destination: /home/raspberrypi/hailo-apps-infra/hailo_apps/hailo_app_python/apps/pose_estimation/pose_estimation.py
-Blind Nav Script:
-Source: Your modified detection.py
-Destination: /home/raspberrypi/hailo-apps-infra/hailo_apps/hailo_app_python/apps/detection/detection.py
+**Project Team:** Buco, Dogillo, Dorongon, Padre, Villariña
+**Adviser:** Engr. Dennis Jefferson A. Amora, PECE, LPT
+[Your Team Email Address or Individual Contact Info]
 
+Project Link: `https://github.com/poginiedward/SENSEY`
 
-## 🎙️ Phase 4: Initialization (Voice Identity)
-Run this command once (requires Internet connection) to generate the Filipino voice assets using Google TTS.
-
-cd ~
-python3 generate_voice.py
-Verification: A folder named audio_files should appear in your home directory containing .mp3 files.
-
-## 🚀 Phase 5: Usage
-Audio: Connect your Speaker or Headphones to the Raspberry Pi 3.5mm jack.
-Run: Execute the Master Controller.
-cd ~
-python3 keyboard_controller.py
-
-## 🎮 Controls
-Key	Action	Voice Feedback (Filipino)
-1	Start Behavior Monitor	"Mode ng Pag-uugali ng Estudyante, Aktibo na."
-2	Start Blind Navigation	"Mode ng Nabigasyon para sa Bulag, Aktibo na."
-s	Stop / Standby	"Naka-standby ang sistema."
-q	Quit Program	"Paalam. Nag-sha-shut down na."
-
-## 🔧 Troubleshooting
-Error: action_logic.py missing
-Ensure the folder /home/raspberrypi/Downloads/pose estimation exists (note the space) and the file is inside it.
-No Audio / Silent:
-Right-click the Volume icon on the RPi desktop.
-Select Output Device -> AV Jack (Headphones).
-Ensure mpg123 is installed (sudo apt install mpg123).
-Black Screen / Window Not Opening:
-The scripts include os.environ["QT_QPA_PLATFORM"] = "xcb" to fix Raspberry Pi 5 display issues automatically.
-Ensure you are using the --sync flag (default in the controller) when running video files.
+---
