@@ -7,7 +7,7 @@ This project implements real-time pose estimation and action recognition (Standi
 ## 1. System Requirements & OS Setup
 
 ### OS Choice: Debian Bookworm (Legacy Full)
-*   **Why Bookworm?** As of late 2025, Debian Trixie is still prone to errors. Most importantly, the official [hailo-rpi5-examples](https://github.com/hailo-ai/hailo-rpi5-examples) repository specifically supports **Bookworm**. 
+- **Why Bookworm?** As of late 2025, Debian Trixie is still prone to errors. Most importantly, the official [hailo-rpi5-examples](https://github.com/hailo-ai/hailo-rpi5-examples) repository specifically supports **Bookworm**. 
 *   **Note:** If you choose to use Trixie, you must use the [hailo-apps-infra](https://github.com/hailo-ai/hailo-apps-infra/tree/main) repository instead, which lacks some specific RPi5 optimizations found in the Bookworm examples.
 
 ## 2. Environment Installation
