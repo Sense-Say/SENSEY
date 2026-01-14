@@ -11,7 +11,7 @@ Before leaving the Pi, you must enable the "doors" that PuTTY and VNC use to ent
 2.  Navigate to **Interface Options**.
 3.  **Enable SSH** (for PuTTY).
 4.  **Enable VNC** (for the visual desktop).
-       *Note: Raspberry Pi 5 uses Wayland by default. Most VNC viewers work, but if you have trouble, the built-in "Screen Sharing" in Raspberry Pi OS settings is the preferred method.*
+      * **Note: Raspberry Pi 5 uses Wayland by default. Most VNC viewers work, but if you have trouble, the built-in "Screen Sharing" in Raspberry Pi OS settings is the preferred method.**
 5.  **Get your IP Address**:
     ```bash
     hostname -I
