@@ -32,19 +32,69 @@ The Hailo chip is "locked" by a previous process. This occurs when a script is s
 
 ### 2. Error 6 / 36: `HAILO_DRIVER_OPERATION_FAILED`
 **Symptoms:**  
-`[HailoRT] [error] CHECK failed - Failed to open device file /dev/hailo0 with error 6`  
-`dmesg` output shows: `Device disconnected while opening device`
+This error (**Error 6 / HAILO_DRIVER_OPERATION_FAILED**) is different from the previous "Busy" error (Error 74). 
 
-**The Cause:**  
-The PCIe link dropped. This is usually due to signal interference at Gen 3 speeds, a loose ribbon cable, or insufficient power.
+**Error 6** (ENXIO) means: *"I see the file `/dev/hailo0`, but when I try to talk to the hardware, no one answers."* This usually points to a **Hardware/PCIe Link failure** or a **Permission issue**.
 
-**The Fix:**  
-1. **Downgrade to PCIe Gen 2:** Gen 2 is significantly more stable than Gen 3 for the RPi5 ribbon cables.
-   - Edit config: `sudo nano /boot/firmware/config.txt`
-   - Change/Add: `dtparam=pciex1_gen=2`
-   - Reboot the Pi.
-2. **Re-seat the Ribbon Cable:** Power down and ensure the FPC cable is perfectly straight and firmly locked into both the Pi and the HAT.
-3. **Check Power Supply:** Ensure you are using the **Official RPi 27W USB-C supply**. Standard chargers often cause PCIe brownouts during high-load inference (like YOLOv8m).
+Follow these steps to diagnose and fix it:
+
+### 1. Check Permissions (The Quickest Fix)
+Sometimes the device file exists but your current user doesn't have permission to open it.
+Run this command:
+```bash
+sudo chmod 666 /dev/hailo0
+```
+Then try to run your script again. If it works, you just need to add your user to the hailo group permanently (usually handled by `hailo-all` but sometimes skipped).
+
+### 2. Check the PCIe Link (Is the Hat still there?)
+Run this to see if the Raspberry Pi's internal bus can still see the Hailo chip:
+```bash
+lspci | grep -i hailo
+```
+*   **If it returns nothing:** The PCIe link has dropped. This is almost always a **loose ribbon cable**.
+*   **If it returns a line (e.g., `0001:01:00.0 Co-processor: ...`):** The hardware is connected, but the driver is crashed.
+
+### 3. Check the System Logs (The "Pro" Diagnostic)
+This will tell you exactly why the driver failed. Run:
+```bash
+dmesg | grep -i hailo
+```
+**Look for these specific errors in the output:**
+*   `hailo: probe of 0001:01:00.0 failed with error -5`: Hardware not responding.
+*   `hailo: device is in D3 state`: Power management error.
+*   `hailo: Failed to find pci bar`: Ribbon cable/Connection issue.
+
+### 4. The Ribbon Cable (The Most Common Culprit)
+The Raspberry Pi 5 PCIe connector is very sensitive. If you moved the Pi or bumped it, the cable might have shifted by a fraction of a millimeter.
+1.  **Shut down and unplug power.**
+2.  Open the little black/white tabs on the Pi 5 and the AI Hat.
+3.  Pull the ribbon cable out and **re-insert it perfectly straight**.
+4.  Make sure the cable is pushed in until the "ears" on the side of the cable touch the connector.
+5.  Lock the tabs firmly.
+
+### 5. Verify `config.txt`
+Make sure your PCIe Gen settings haven't been lost. Open the config:
+```bash
+sudo nano /boot/firmware/config.txt
+```
+Ensure these lines are at the bottom:
+```text
+dtparam=pciex1
+dtparam=pciex1_gen=3
+```
+*Note: If you have Gen 3 and it's unstable, try changing `gen=3` to `gen=2` to see if the error goes away. Gen 2 is slightly slower but much more stable if the cable is not perfect.*
+
+### 6. Reset the Driver
+If `lspci` sees the device but the script fails, try reloading the driver one more time:
+```bash
+sudo modprobe -r hailo_pci
+sudo modprobe hailo_pci
+```
+
+**Summary of what to do right now:**
+1. Run `lspci | grep -i hailo`.
+2. If it shows nothing, **unplug power and re-seat the ribbon cable**.
+3. If it shows the device, run `sudo chmod 666 /dev/hailo0` and try again..
 
 ---
 
