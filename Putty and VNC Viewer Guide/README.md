@@ -1,4 +1,3 @@
----
 
 ### Phase 1: Prepare the Raspberry Pi (Server)
 
