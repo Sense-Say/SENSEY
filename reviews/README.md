@@ -171,4 +171,119 @@ Then `T(s) = Num / (Den + Num)`
 | **Ts** | Settling Time | `4 / Real_Part` |
 | **%OS** | Overshoot | Depends ONLY on **ζ** |
 
-**Good luck! You've got this.**
+
+# 📚 Part 2: Advanced Formulas & Pole Plot Geometry
+**Source:** "SUMMARY OF TIME RESPONSE FORMULAS" PDF
+**Focus:** The specific equations and S-Plane geometry you need for the exam.
+
+---
+
+## 8. The "Big" Time Response Equation
+Your PDF (Page 4) provides the **exact equation** for the position of an underdamped system at any specific time `t`.
+
+While you usually calculate specs ($T_p$, $T_s$), you might be asked to identify parts of this equation:
+
+```text
+c(t) = 1 - (A) * e^(-σt) * cos(ωd*t - φ)
+```
+
+**Breakdown of the parts:**
+1.  **`1`**: The Steady State value (where it settles).
+2.  **`e^(-σt)`**: The **Exponential Decay Envelope**. This determines how fast the amplitude shrinks.
+    *   `σ = ζ * ωn` (Also called `σd` in your PDF).
+3.  **`cos(ωd*t)`**: The **Oscillation**. This part creates the waves.
+    *   `ωd = ωn * sqrt(1 - ζ^2)` (Damped Frequency).
+
+---
+
+## 9. S-Plane Geometry (The Triangle)
+**Referencing Page 5 Pole Plot:**
+If you are asked to sketch the poles or derive values from a graph, remember this **Right Triangle** formed by the origin and the pole location.
+
+| Graph Feature | Variable | Formula | Meaning |
+| :--- | :--- | :--- | :--- |
+| **Horizontal Axis** (Real) | **σd** | `ζ * ωn` | How fast it settles (Decay). |
+| **Vertical Axis** (Imaginary) | **ωd** | `ωn * sqrt(1 - ζ^2)` | How fast it rings (Freq). |
+| **Hypotenuse** (Length) | **ωn** | `sqrt(σd^2 + ωd^2)` | Natural Frequency. |
+| **Angle** (from Neg. Real Axis) | **θ** | `cos(θ) = ζ` | Damping Ratio. |
+
+> **💡 Exam Tip:** If the pole moves **Left**, settling time decreases (faster). If the pole moves **Up**, the oscillation frequency increases.
+
+---
+
+## 10. Rapid Identification (Examples from PDF)
+Your PDF (Pages 2 & 3) gives specific numerical examples. Here is how to spot them instantly:
+
+### A. Undamped (ζ = 0)
+**Look for:** No middle `s` term.
+**PDF Example:** `9 / (s^2 + 9)`
+*   `s^2 + 9 = 0` → `s = ±j3`
+*   Result: Pure oscillation (Sine wave).
+
+### B. Underdamped (0 < ζ < 1)
+**Look for:** Middle term is small compared to the ends.
+**PDF Example:** `9 / (s^2 + 2s + 9)`
+*   Middle term (2) is small.
+*   Roots are complex numbers (`-1 ± j2.82`).
+*   Result: Wiggles then settles.
+
+### C. Critically Damped (ζ = 1)
+**Look for:** The denominator is a perfect square `(s + a)^2`.
+**PDF Example:** `9 / (s^2 + 6s + 9)`
+*   Factor it: `(s + 3)(s + 3)`.
+*   Roots are equal real numbers (`-3, -3`).
+*   Result: Fast rise, no overshoot.
+
+### D. Overdamped (ζ > 1)
+**Look for:** The denominator factors easily into two different numbers.
+**PDF Example:** `9 / (s^2 + 9s + 9)`
+*   Roots are real and different.
+*   Result: Slow, sluggish rise.
+
+---
+
+## 11. Theoretical Definitions (Page 1)
+Just in case these come up as multiple-choice questions:
+
+**1. Total Time Response =**
+*   **Transient Response** (The temporary part that dies out)
+*   **+ Steady-State Response** (The part that stays forever)
+
+**OR**
+
+**2. Total Time Response =**
+*   **Natural Response** (Due to the system's internal energy/poles)
+*   **+ Forced Response** (Due to the input source)
+
+---
+
+## 12. Final "Cheat Sheet" for the Calculator
+These are the **exact forms** from your PDF to type into your calculator.
+
+**To find Settling Time (Ts):**
+```text
+Ts = 4 / (ζ * ωn)
+```
+*Note: Your PDF also lists `-ln(0.02 * sqrt(1-ζ^2)) / (ζ*ωn)`, but simplifies it to `4 / (ζ*ωn)`. Use the simple one.*
+
+**To find Peak Time (Tp):**
+```text
+Tp = π / (ωn * sqrt(1 - ζ^2))
+```
+*Calculator Mode: Use the `π` button, not 3.14.*
+
+**To find % Overshoot (%OS):**
+```text
+%OS = e^( -(ζ * π) / sqrt(1 - ζ^2) ) * 100
+```
+
+**To find Damping Ratio (ζ) from %OS:**
+```text
+      -ln(%OS / 100)
+ζ = ------------------------------------
+    sqrt( π^2 + (ln(%OS / 100))^2 )
+```
+
+***
+
+**You are now armed with the concepts and the official formulas. Go get some sleep, wake up fresh, and crush that exam! 👊**
