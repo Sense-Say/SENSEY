@@ -3,7 +3,7 @@
 ```mermaid
 graph TD
     %% Define the single, large system container
-    subgraph SYSTEM_CONTAINER ["**Blind Navigation and Student Monitoring Diagram**"]
+    subgraph SYSTEM_CONTAINER ["**Block Diagram**"]
         direction TB
         %% 0. Start
         Z([Start]) -->
