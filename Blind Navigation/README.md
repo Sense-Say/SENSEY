@@ -1,20 +1,22 @@
-## 📐 Methodology Architecture (Unified System View)
+## 📐 Methodology Architecture (Block Diagram)
 
 ```mermaid
 graph TD
     %% Define the single, large system container
-    subgraph SYSTEM_CONTAINER ["EYE-LINK AI ASSISTANT (All-in-One System)"]
+    subgraph SYSTEM_CONTAINER ["**Blind Navigation and Student Monitoring Diagram**"]
         direction TB
+        %% 0. Start
+        Z([Start]) -->
 
         %% 1. Input Flow
         A([User Action]) --> B{Input Type?}
         
         B -->|Toggle Switch| C{Mode Selection?}
-        B -->|Push-to-Talk| D["Vosk Speech Recognition"]
+        B -->|PushButton-to-Talk| D["Vosk Speech Recognition"]
         D -->|Command Text| RPICPU
 
         %% 2. Mode Activation & Data Flow
-        C -->|Navigation Mode| E["OAK-D Lite Engine (Nav Data)"]
+        C -->|Navigation Mode| E["OAK-D Lite Engine (Navigation Data)"]
         C -->|Monitoring Mode| F["Hailo AI HAT+ Engine (Behavior Data)"]
         C -->|Standby Mode| K([End/Idle])
         
@@ -45,7 +47,7 @@ graph TD
     O --> K
 
     %% --- Styling for Clarity ---
-    style SYSTEM_CONTAINER fill:#fffacd,stroke:#333,stroke-width:2px;
+    style SYSTEM_CONTAINER fill:#fffacd,stroke:#333,stroke-width:4px;
     style H fill:#ffcdd2,stroke:#c62828,stroke-width:2px
     style I fill:#ef9a9a,stroke:#c62828,stroke-width:2px
     style J fill:#ef9a9a,stroke:#c62828,stroke-width:2px
