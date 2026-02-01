@@ -145,7 +145,7 @@ graph TD
     O --> K
 
     %% --- Styling for Clarity ---
-    style SYSTEM_CONTAINER fill:#fffacd,stroke:#333,stroke-width:4px;
+    style SYSTEM_CONTAINER fill:#fffacd,stroke:#333,stroke-width:1px;
     style H fill:#ffcdd2,stroke:#c62828,stroke-width:2px
     style I fill:#ef9a9a,stroke:#c62828,stroke-width:2px
     style J fill:#ef9a9a,stroke:#c62828,stroke-width:2px
