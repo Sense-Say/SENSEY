@@ -35,7 +35,7 @@ The fan's behavior is controlled via parameters in the `config.txt` file, which 
     # Custom settings for Raspberry Pi 5 Active Cooler: 100% speed from boot
     dtoverlay=rpi-5-fan        # Ensures the fan overlay is active
     dtparam=fan_temp0=1        # Sets the first fan stage to activate at 0.001°C (effectively always on)
-    dtparam=fan_temp0_speed=100 # Sets the fan speed for stage 0 to 100%
+    dtparam=fan_temp0_speed=255 # Sets the fan speed for stage 0 to 100%
     ```
 
     **Explanation of Parameters:**
