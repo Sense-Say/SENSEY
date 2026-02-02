@@ -76,3 +76,44 @@ While the fan might not *sound* or *feel* as powerful as larger fans, its 1.09 C
 
 **Further Reading:**
 *   Raspberry Pi Documentation on `config.txt` and `dtparam`: [http://rptl.io/configtxt](http://rptl.io/configtxt) (Search for `rpi-5-fan` within this document for detailed overlay options.)
+
+
+
+---
+https://github.com/raspberrypi/linux/blob/rpi-6.12.y/arch/arm/boot/dts/overlays/README
+---
+ fan_temp0               Temperature threshold (in millicelcius) for
+                                1st cooling level (default 50000). Pi5 only.
+                                
+        fan_temp0_hyst          Temperature hysteresis (in millicelcius) for
+                                1st cooling level (default 5000). Pi5 only.
+                                
+        fan_temp0_speed         Fan PWM setting for 1st cooling level (0-255,
+                                default 75). Pi5 only.
+                                
+        fan_temp1               Temperature threshold (in millicelcius) for
+                                2nd cooling level (default 60000). Pi5 only.
+                                
+        fan_temp1_hyst          Temperature hysteresis (in millicelcius) for
+                                2nd cooling level (default 5000). Pi5 only.
+                                
+        fan_temp1_speed         Fan PWM setting for 2nd cooling level (0-255,
+                                default 125). Pi5 only.
+                                
+        fan_temp2               Temperature threshold (in millicelcius) for
+                                3rd cooling level (default 67500). Pi5 only.
+                                
+        fan_temp2_hyst          Temperature hysteresis (in millicelcius) for
+                                3rd cooling level (default 5000). Pi5 only.
+                                
+        fan_temp2_speed         Fan PWM setting for 3rd cooling level (0-255,
+                                default 175). Pi5 only.
+                                
+        fan_temp3               Temperature threshold (in millicelcius) for
+                                4th cooling level (default 75000). Pi5 only.
+                                
+        fan_temp3_hyst          Temperature hysteresis (in millicelcius) for
+                                4th cooling level (default 5000). Pi5 only.
+                                
+        fan_temp3_speed         Fan PWM setting for 4th cooling level (0-255,
+                                default 250). Pi5 only.
