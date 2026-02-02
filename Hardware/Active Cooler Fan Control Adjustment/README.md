@@ -117,3 +117,15 @@ https://github.com/raspberrypi/linux/blob/rpi-6.12.y/arch/arm/boot/dts/overlays/
                                 
         fan_temp3_speed         Fan PWM setting for 4th cooling level (0-255,
                                 default 250). Pi5 only.
+
+
+---Name:   gpio-fan
+Info:   Configure a GPIO pin to control a cooling fan.
+Load:   dtoverlay=gpio-fan,<param>=<val>
+Params: gpiopin                 GPIO used to control the fan (default 12)
+        temp                    Temperature at which the fan switches on, in
+                                millicelcius (default 55000)
+        hyst                    Temperature delta (in millicelcius) below
+                                temp at which the fan will drop to minrpm
+                                (default 10000)
+
