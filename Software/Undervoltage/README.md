@@ -1,4 +1,7 @@
 vcgencmd pmic_read_adc EXT5V_V
+or
+vcgencmd pmic_read_adc             ## to see current/voltage
+
 https://www.youtube.com/watch?v=lEZccWuOXuo
 
 
