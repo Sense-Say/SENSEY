@@ -205,13 +205,60 @@ The system uses a rigid, redundant framework to ensure the teacher is always awa
 
 ## IV. MONITORING ENGINE LOGIC (Mode 3)
 
-The geometry rules are designed to be view-agnostic and robust against students' typical slumping and seating positions.
+For a blind teacher, the most valuable behaviors are those that affect **classroom management, engagement, and safety.
 
-| Behavior Detected | Geometric Rule (Based on Fused 3D Data) | Rationale |
+--
+
+### 1. The Collaborative/Peer-Cheating Pose (High Value)
+
+**Goal:** Detect unauthorized communication or peer-to-peer visual cheating. This is distinct from simple leaning.
+
+| Behavior | Logic / Rationale | Target (Action) |
 | :--- | :--- | :--- |
-| **Hand Raising** | **`Y_Wrist < Y_Eye`** (for either wrist) | A simple, reliable 2D rule. Wrist must be vertically higher than the eye level to be considered a question. |
-| **Aggressive Slouch/Lean** | **`(Z_Shoulder - Z_Nose) > 300mm`** | **3D Rule:** Head is 30cm closer to the teacher than the shoulders. Indicates severe slumping or forward leaning. |
-| **Cheating** | **`X_Nose` is outside `Shoulder_Width * 1.2`** | **2D Rule:** Head is positioned horizontally outside the profile of the body, indicating the student is looking sideways at a peer's desk. |
+| **Huddle/Head-Proximity** | **`Distance(Nose_Student_A, Nose_Student_B) < Shoulder_Width * 1.5`** | Two students' heads are abnormally close together (1.5 times the width of a single shoulder width). This is a strong signal for whispering or looking at the same paper. |
+| **Writing Sharing** | **`Distance(Wrist_A, Wrist_B) < Hip_Width`** | Two students' wrists are close together and near the desk surface. This is a clear signal that they are touching or looking at the same writing surface. |
+| **Teacher Feedback:** *"Heads huddled on the right."* |
+
+### 2. The Boredom / Disinterest Pose (Engagement Management)
+
+**Goal:** Detect a student who is bored and no longer interacting with the lesson. This is different from sleeping.
+
+| Behavior | Logic / Rationale | Target (Action) |
+| :--- | :--- | :--- |
+| **Head-on-Shoulder** | **`Distance(Nose, Elbow) < Shoulder_Width * 0.5`** **AND** **`Y_Elbow > Y_Nose`** | The student is bracing their head with their elbow on the desk. The elbow is higher than the nose. This is a classic "I'm bored" pose, distinct from resting on the hands. |
+| **Crossed Arms** | **`Distance(Wrist_L, Wrist_R)` is minimal AND `Y_Shoulder` is far from `Y_Hip`** | The wrists are close together, but the torso is upright. This is the posture of a student who has "checked out" but is not asleep. |
+| **Teacher Feedback:** *"One student is bracing their head with their arm."* |
+
+### 3. The "Searching/Looking Away" Pose (Focus Management)
+
+**Goal:** Detect students who are looking at the clock, out the window, or at their phone in their lap.
+
+| Behavior | Logic / Rationale | Target (Action) |
+| :--- | :--- | :--- |
+| **Head Down (Phone Use)** | **`Y_Nose` is far below `Y_Shoulder` AND `Y_Nose` is near `Y_Hip`** | The student's head is tilted straight down (as if looking at a phone in their lap). The vertical distance between the head and the shoulder is large. |
+| **Sideways Twist** | **`Angle(Shoulder-Hip-Knee)` is far from 180 degrees** | The torso is twisted out of alignment with the hips, indicating the student is completely turned around in their seat. |
+| **Teacher Feedback:** *"Student is looking down intensely."* |
+
+### 4. The Safety/Physical Discomfort Pose (Crucial for Public Schools)
+
+**Goal:** Detect students who may be in discomfort and need attention, especially valuable since the teacher cannot visually check.
+
+| Behavior | Logic / Rationale | Target (Action) |
+| :--- | :--- | :--- |
+| **Stomach/Chest Clutch** | **`Distance(Wrist_L, Avg_Hip) < Hip_Width * 0.5`** **AND** **`Distance(Wrist_R, Avg_Hip) < Hip_Width * 0.5`** | Both wrists are pulled down and held tightly near the abdominal area. This is a very strong signal of pain or discomfort. |
+| **Head-in-Hands/Exhaustion** | **`Y_Elbow` is low AND `Y_Wrist` covers `Y_Eye/Nose`** | The student's head is completely enveloped by their hands. This is a high-level distress/exhaustion signal. |
+| **Teacher Feedback:** *"Student in the back is clutching their stomach area."* |
+
+---
+
+### Summary of Benefits
+
+These four categories provide the teacher with **actionable intelligence** that requires a response:
+
+*   **P1 Safety:** *Heads Huddled* or *Stomach Clutch*
+*   **P2 Engagement:** *Hand Raise* or *Boredom Bracing*
+
+By focusing on these geometrically distinct poses, you minimize false alarms from simple reading and writing.
 
 ### The Non-LLM Behavior Summarizer
 
