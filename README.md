@@ -174,7 +174,7 @@ The system is managed via a physical **3-Mode Toggle Switch** for clear, tactile
 | Mode | Hardware Focus | Primary Function | Audio Control / Trigger |
 | :--- | :--- | :--- | :--- |
 | **1. NAVIGATION** | **OAK-D Lite** (VIO, Depth) | Guiding the teacher (walking) via an audio compass and obstacle avoidance. | **Auto-Pilot:** Speaks only when an obstacle is detected or a turn is needed. |
-| **2. STANDBY** | **ALL AI INACTIVE** | Power saving. Used during lecturing/sitting to ensure complete silence. | **SILENCE.** |
+| **2. STANDBY (MODE 2)** | **ALL AI INACTIVE** | Power saving. Used during lecturing/sitting to ensure complete silence. | **SILENCE.** |
 | **3. MONITORING**| **Hailo AI HAT+** (Pose) | Tracking student behavior (hands, sleeping, cheating). | **ON-DEMAND:** Speaks only when the **Push-to-Talk button** is clicked. |
 
 ---
