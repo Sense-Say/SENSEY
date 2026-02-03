@@ -206,8 +206,7 @@ The system uses a rigid, redundant framework to ensure the teacher is always awa
 ## IV. MONITORING ENGINE LOGIC (Mode 3)
 
 For a blind teacher, the most valuable behaviors are those that affect **classroom management, engagement, and safety.
-
---
+##
 
 ### 1. The Collaborative/Peer-Cheating Pose (High Value)
 
