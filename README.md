@@ -249,15 +249,46 @@ For a blind teacher, the most valuable behaviors are those that affect **classro
 | **Teacher Feedback:** *"Student in the back is clutching their stomach area."* |
 
 ---
+The Hailo NPU's strength is its lightning-fast **2D Pose Estimation**. The OAK-D's strength is the **3D Depth**. We will make the Hailo handle everything it can first.
 
-### Summary of Benefits
+Here is the breakdown of which logic set requires only the Hailo's 2D data and which requires the OAK-D's 3D fusion.
 
-These four categories provide the teacher with **actionable intelligence** that requires a response:
+---
 
-*   **P1 Safety:** *Heads Huddled* or *Stomach Clutch*
-*   **P2 Engagement:** *Hand Raise* or *Boredom Bracing*
+## The Pose Logic Separation: 2D vs. 3D Requirements
 
-By focusing on these geometrically distinct poses, you minimize false alarms from simple reading and writing.
+### ✅ Set A: 2D-Only Logic (Hailo NPU Task)
+
+These rules rely on the relationship between points in the image plane (vertical position and angle) and are robust enough to run on the fast Hailo NPU without waiting for depth data.
+
+| Behavior | Logic / Rationale | Key 2D Rule |
+| :--- | :--- | :--- |
+| **1. Hand Raising** | **Interaction Signal** | **`Y_Wrist < Y_Eye`** (Wrist is vertically above the eye line). |
+| **2. Cheating (Sideways)** | **Focus / Direction of Gaze** | **`X_Nose` is outside the horizontal bounds of `Shoulder_L` and `Shoulder_R`.** (Detection of severe turning). |
+| **3. Boredom (Bracing)** | **Torso/Arm Angle** | **`Y_Elbow > Y_Nose`** (Elbow is supporting the head). |
+| **4. Torso Twist** | **Disengagement** | **`Y_Left_Shoulder - Y_Right_Shoulder > Shoulder_Width * 0.3`** (One shoulder is significantly higher than the other, meaning the body is rotated). |
+| **5. Extreme Head Down** | **Disengagement / Phone Use** | **`Y_Nose` is level with or below `Y_Hip`** (Head is almost in the lap). |
+
+---
+
+### ❌ Set B: 3D-Required Logic (RPi5 Fusion Task)
+
+These rules require the depth (Z-axis) to measure the student's posture *relative to the camera* or *relative to the rest of their body*. **These MUST wait for the OAK-D data fusion.**
+
+| Behavior | Logic / Rationale | Key 3D Rule |
+| :--- | :--- | :--- |
+| **1. Huddle/Peer-Cheating** | **Proximity to another student.** | **`Distance(Nose_A, Nose_B)` in 3D Space (X, Y, Z) is too short.** (The simple 2D distance is wrong if one is sitting 2m away and the other is 3m away). |
+| **2. Sleeping (Head Resting)** | **Proximity to Desk/Hands.** | **`Distance(Nose, Avg_Wrist) < 400mm` (3D)** OR **`Z_Nose` is lower than expected for a sitting person.** (Crucial to avoid false alarms from leaning). |
+| **3. Aggressive Lean Forward** | **Front-to-Back Posture** | **`(Z_Shoulder - Z_Nose) > 300mm`** (Head is 30cm closer to the teacher than the shoulders). |
+| **4. Stomach Clutch** | **Proximity to Torso Center.** | **`Distance(Wrist, Avg_Hip)` in 3D Space is minimal.** (Need 3D to accurately track the depth of the hands near the center of the body). |
+
+---
+
+### Conclusion for Your Development Plan
+
+1.  **Phase 1 (Hailo First):** Focus all initial development on **Set A (2D-Only Logic)**. This allows you to deploy a highly functional monitoring system quickly using the Hailo's speed without the complexity of the OAK-D integration.
+2.  **Phase 2 (Fusion Upgrade):** Once Set A is stable, move to the **Data Fusion**. The 3D data will then unlock **Set B's Logic** to refine the system further and add advanced features like slouch detection and peer-proximity alerts.
+
 
 ### The Non-LLM Behavior Summarizer
 
