@@ -140,3 +140,4 @@ This shows how all the pieces of your project work together in the final system:
 | **"Unknown" Name on Screen** | The **`name_map.json`** is missing or the face was not clearly visible during **Phase 2**. |
 | **Trivia Fact** | We use the **Pose AI's Nose Keypoint** to help the Face AI find your head. This technique is called **Cascaded Vision**. |
 | **Final Exit** | Use the **`Q`** key when the video window is active. It is programmed to perform a clean exit (`os._exit(0)`). |
+| **Thonny not Configured** | Click Run --> Configure Interpreter --> Cick the three dots [...] button --> find this path in venv_apps and click**python3**(/home/raspberrypi/hailo-apps/venv_hailo_apps/bin/python3) |
