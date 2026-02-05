@@ -1,8 +1,8 @@
-# 🏫 Hailo-8 Classroom Monitoring System (Pose & Dynamic Identity)
+#  Hailo-8 Classroom Monitoring System (Pose & Dynamic Identity)
 
 This project demonstrates a highly stable, high-performance application for student monitoring using the Raspberry Pi AI Kit (Hailo-8/8L). It runs Pose Estimation on the NPU and uses a pre-scanned map for dynamic student identification, completely eliminating the risk of CPU overload and undervoltage.
 
-## 🚀 Key Features
+##  Key Features
 
 *   **NPU-Powered Performance**: Both Pose Estimation (YOLOv8) and Face Recognition (ArcFace) are offloaded to the Hailo-8 chip.
 *   **Zero CPU Overload**: CPU usage remains low, preventing undervoltage issues common to multi-AI systems on the Raspberry Pi 5.
@@ -54,7 +54,7 @@ This project relies on three scripts being placed in a stable, easily accessible
 | :--- | :--- | :--- |
 | `npu_face_enrollment.py` | `/home/raspberrypi/Downloads/` | GUI for creating the face database (`npu_encodings.pickle`). |
 | `npu_face_snap.py` | `/home/raspberrypi/Downloads/` | The one-time script that executes the NPU scan and creates the `name_map.json`. |
-| `pose_estimation_utils.py` | `hailo-apps/.../pose_estimation/` | **The Core Patch.** Reads the JSON and draws the final labels. |
+| `pose_estimation_utils.py & pose_estimation.py` | `hailo-apps/.../pose_estimation/` | **The Core Patch.** Reads the JSON and draws the final labels. |
 | **Output Files** | `/home/raspberrypi/Downloads/` | `npu_encodings.pickle` & `name_map.json`. |
 
 ---
@@ -95,6 +95,39 @@ This is the final, stable monitoring run. The system reads the name map and runs
     python3 standalone_poseversion2.py
     ```
 2.  **Result**: The video feed opens, the FPS is high, and the labels are correctly mapped to **"[Student Name] | [Action] | [Score]"**.
+
+---
+
+##  4. The Role of Action Logic and Data Flow
+
+The system is a true multi-stage processing pipeline. The **`action_logic.py`** script is not just used—it is the **primary intelligence layer** that processes the raw data from the Hailo chip.
+
+### A. Action Logic (`action_logic.py`)
+
+This script is responsible for translating **raw keypoints** (X, Y coordinates of joints) into **human behavior**.
+
+| Function | Data Input | Output | Usage |
+| :--- | :--- | :--- | :--- |
+| **`action_logic.py`** | Raw Pose Keypoints (X, Y) | **Behavior** (e.g., "Raising Hand," "Standing") and **Color** (e.g., Red for Alert, Green for Normal). | This logic runs *every single frame*. It dictates the final label and the color of the bounding box. |
+
+**Integration Point:** In the final `pose_estimation_utils.py` you are running, the script makes two crucial calls to the action logic:
+
+1.  **`act_txt, act_col = self.action_monitor.get_action(...)`**: This line determines the student's behavior.
+2.  **`cv2.rectangle(..., act_col, 2)`**: This uses the color returned by the action logic to provide instant visual feedback on the screen.
+
+### B. The Full Data Flow Path
+
+This shows how all the pieces of your project work together in the final system:
+
+| Stage | Component | Output | Purpose |
+| :--- | :--- | :--- | :--- |
+| **1. Sensing** | USB Camera | BGR Frame | Continuous video input. |
+| **2. Core Inference** | Hailo-8 NPU | **Keypoints (X, Y)** + Bounding Boxes | Finds bodies (Pose Estimation). |
+| **3. Behavior Analysis** | `action_logic.py` (CPU) | **Action Text** & **Color** | Calculates behavior (Running every frame). |
+| **4. Identity Lookup** | `name_map.json` (File) | **Student Name** | Provides the name (Pre-scanned). |
+| **5. Final Display** | `pose_estimation_utils.py` (CPU) | **"[Name] | [Action] | [Score]"** | Draws the composite label on the screen. |
+
+**Conclusion:** The Action Logic is fully integrated and running continuously. The system defaults to this logic (showing "Monitoring" or "Raising Hand") and only updates the **Name** when the JSON file tells it to.
 
 ---
 
