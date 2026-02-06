@@ -17,36 +17,56 @@ def is_point_in_box(point, box):
     return xmin <= x <= xmax and ymin <= y <= ymax
 
 def process_image():
-    print("📸 Processing Screenshot with Spatial Matching...")
+    print("📸 Processing Screenshot with ID Reset Logic...")
     
-    # 1. Load Image and Boxes
     if not os.path.exists(SCREENSHOT_PATH) or not os.path.exists(BOXES_PATH):
-        print("❌ Error: Missing screenshot or box data.")
+        print("❌ Error: Missing files.")
         return
     
     frame = cv2.imread(SCREENSHOT_PATH)
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
-    with open(BOXES_PATH, "r") as f:
-        pose_boxes = json.load(f) # List of {"id": "0", "box": [xmin, ymin, xmax, ymax]}
-    
-    with open(DB_PATH, "rb") as f:
-        data = pickle.load(f)
+    # 1. Load Current Pose IDs
+    try:
+        with open(BOXES_PATH, "r") as f:
+            pose_boxes = json.load(f) # List of {"id": "0", "box": [...]}
+    except: return
 
-    # 2. Detect Faces
+    # 2. Load Existing Name Map
+    current_map = {}
+    if os.path.exists(MAP_PATH):
+        try:
+            with open(MAP_PATH, "r") as f:
+                content = f.read().strip()
+                if content: current_map = json.loads(content)
+        except: current_map = {}
+
+    # --- 3. THE RESET STEP ---
+    # For every person currently visible in the Pose Monitor, 
+    # we REMOVE their name from the map first.
+    # This ensures that if they aren't recognized now, they become "Student X".
+    for item in pose_boxes:
+        body_id = str(item["id"])
+        if body_id in current_map:
+            print(f"   - Resetting ID {body_id} to 'Student' status...")
+            del current_map[body_id]
+
+    # 4. Load Face Database
+    try:
+        with open(DB_PATH, "rb") as f:
+            data = pickle.load(f)
+    except: 
+        print("❌ Database Error.")
+        return
+
+    # 5. Detect and Recognize Faces
     face_locations = face_recognition.face_locations(rgb, model="hog")
     face_encodings = face_recognition.face_encodings(rgb, face_locations)
 
-    current_map = {}
-    if os.path.exists(MAP_PATH):
-        with open(MAP_PATH, "r") as f:
-            current_map = json.load(f)
+    print(f"   - Found {len(face_encodings)} faces to check.")
 
-    # 3. Match Faces to Bodies Spatially
     for (top, right, bottom, left), encoding in zip(face_locations, face_encodings):
-        # Calculate face center
-        face_center_x = (left + right) // 2
-        face_center_y = (top + bottom) // 2
+        face_center = ((left + right) // 2, (top + bottom) // 2)
         
         matches = face_recognition.compare_faces(data["encodings"], encoding, tolerance=0.55)
         name = "Unknown"
@@ -54,21 +74,22 @@ def process_image():
         if True in matches:
             distances = face_recognition.face_distance(data["encodings"], encoding)
             best_idx = np.argmin(distances)
-            if matches[best_idx]:
-                name = data["names"][best_idx]
+            name = data["names"][best_idx]
         
-        # FIND WHICH POSE BOX THIS FACE IS INSIDE
-        for item in pose_boxes:
-            body_id = item["id"]
-            box = item["box"]
-            if is_point_in_box((face_center_x, face_center_y), box):
-                current_map[body_id] = name
-                print(f"✅ Body {body_id} mapped to Name: {name}")
-                break
+        # 6. MATCH RECOGNIZED FACE TO POSE BOX
+        if name != "Unknown":
+            for item in pose_boxes:
+                body_id = str(item["id"])
+                box = item["box"]
+                if is_point_in_box(face_center, box):
+                    current_map[body_id] = name
+                    print(f"   ✅ SUCCESS: ID {body_id} identified as {name}")
+                    break
 
-    # 4. Save Map
+    # 7. Save the Cleaned/Updated Map
     with open(MAP_PATH, "w") as f:
-        json.dump(current_map, f)
+        json.dump(current_map, f, indent=4)
+    print(f"✅ Map Updated. Visible students without names will show as 'Student X'.")
 
 if __name__ == "__main__":
     process_image()
