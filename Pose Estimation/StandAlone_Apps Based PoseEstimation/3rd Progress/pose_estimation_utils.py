@@ -253,12 +253,15 @@ class PoseEstPostProcessing:
             joint_threshold: float = 0.5,
     ) -> np.ndarray:
         
-        import time, cv2, json, os, sys, subprocess, numpy as np
+        import time, cv2, json, os, sys, numpy as np
         
-        # 1. INIT
+        # --- 1. INITIALIZATION (Runs once) ---
         if not hasattr(self, 'logic_initialized'):
             self.name_map = {}
             self.prev_time = time.time()
+            self.report_printed = False
+            
+            # Load Action Logic
             try:
                 sys.path.append("/home/raspberrypi/Documents")
                 from action_logic import StudentActionMonitor
@@ -268,7 +271,7 @@ class PoseEstPostProcessing:
                     def get_action(self, k, i, c): return "Monitoring", (0,255,0)
                 self.action_monitor = Dummy()
             
-            # Load Map
+            # Load Name Map
             map_path = "/home/raspberrypi/Documents/name_map.json"
             if os.path.exists(map_path):
                 try:
@@ -277,40 +280,48 @@ class PoseEstPostProcessing:
                 except: pass
             self.logic_initialized = True
 
-        # 3. DATA EXTRACTION
+        # --- 2. DATA EXTRACTION (Must be done BEFORE the 'S' key logic) ---
+        bboxes, scores, keypoints, joint_scores = None, None, None, None
         try:
-            if 'predictions' in results: bboxes, scores, kps, j_scores = results['predictions']
-            elif 'bboxes' in results: bboxes, scores, kps, j_scores = results['bboxes'], results['scores'], results['keypoints'], results['joint_scores']
-            else: return image
-            box_data, score_data, kp_data, kp_score_data = bboxes[0], scores[0], kps[0], j_scores[0]
-        except: return image
+            if 'predictions' in results:
+                bboxes, scores, keypoints, joint_scores = results['predictions']
+            elif 'bboxes' in results and 'keypoints' in results:
+                bboxes = results['bboxes']
+                scores = results['scores']
+                keypoints = results['keypoints']
+                joint_scores = results['joint_scores']
+            else:
+                return image
+
+            box_data, score_data, kp_data, kp_score_data = bboxes[0], scores[0], keypoints[0], joint_scores[0]
+        except Exception:
+            return image
 
         orig_h, orig_w = image.shape[:2]
 
-        # 2. KEYBOARD CONTROL
+        # --- 3. KEYBOARD CONTROL & SNAPSHOT TRIGGER ---
         key = cv2.waitKey(1) & 0xFF
         
         if key == ord('s'):
-            # Save Screenshot
+            # A. Save Screenshot (Convert to BGR for OpenCV saving)
             save_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             cv2.imwrite("/home/raspberrypi/Documents/temp_screenshot.jpg", save_image)
             
-            # --- CRITICAL: SAVE POSE BOXES FOR SPATIAL MATCHING ---
+            # B. Save Pose Boxes for Spatial Matching
             pose_boxes = []
             for i, (box, score, _, _) in enumerate(zip(box_data, score_data, kp_data, kp_score_data)):
                 if float(score) > detection_threshold:
                     det_box = self.map_box_to_original_coords(box, orig_w, orig_h, model_width, model_height)
-                    # Convert to list for JSON serialization
+                    # Save ID and coordinates [xmin, ymin, xmax, ymax]
                     pose_boxes.append({
                         "id": str(i),
-                        "box": [int(x) for x in det_box] # [xmin, ymin, xmax, ymax]
+                        "box": [int(x) for x in det_box]
                     })
             
             with open("/home/raspberrypi/Documents/temp_boxes.json", "w") as f:
                 json.dump(pose_boxes, f)
-            # -----------------------------------------------------
             
-            # Create Trigger
+            # C. Create Trigger
             with open("/home/raspberrypi/Documents/trigger.txt", "w") as f:
                 f.write("snap")
             
@@ -318,14 +329,18 @@ class PoseEstPostProcessing:
             try: os._exit(0)
             except: sys.exit(0)
 
-        if key == ord('q'): os._exit(0)
+        if key == ord('q'): 
+            try: os._exit(0)
+            except: sys.exit(0)
 
-        # FPS
+        # --- 4. FPS DISPLAY ---
         fps = 1 / (time.time() - self.prev_time)
         self.prev_time = time.time()
         cv2.putText(image, f"FPS: {fps:.1f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # 4. DRAWING LOOP
+        # --- 5. MAIN DRAWING & REPORTING LOOP ---
+        report_lines = []
+        
         for i, (box, score, kp, kp_score) in enumerate(zip(box_data, score_data, kp_data, kp_score_data)):
             if float(score) < detection_threshold: continue
             
@@ -335,12 +350,16 @@ class PoseEstPostProcessing:
             # Action Logic
             raw_kp = kp.reshape(17, 2)
             fmt_kp = [[p[0], p[1], s] for p, s in zip(raw_kp, kp_score)]
-            act, col = self.action_monitor.get_action(fmt_kp, i, (xmin+(xmax-xmin)//2, ymin+(ymax-ymin)//2))
+            center = (xmin + (xmax-xmin)//2, ymin + (ymax-ymin)//2)
+            act, col = self.action_monitor.get_action(fmt_kp, i, center)
 
-            # Name Lookup (Uses Index 'i', which is mapped by spatial location in the snap script)
+            # Name Lookup (Uses Index 'i', which maps to the spatial ID from the snap script)
             name = self.name_map.get(str(i), f"Student {i+1}")
             
-            # Draw
+            # Collect data for terminal report
+            report_lines.append(f"   👉 {name} is {act}")
+
+            # Draw UI
             cv2.rectangle(image, (xmin, ymin), (xmax, ymax), col, 2)
             cv2.rectangle(image, (xmin, ymin-25), (xmin+260, ymin), col, -1)
             cv2.putText(image, f"{name} | {act}", (xmin+5, ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
@@ -352,6 +371,14 @@ class PoseEstPostProcessing:
             for j0, j1 in JOINT_PAIRS:
                 if kp_score[j0] > joint_threshold and kp_score[j1] > joint_threshold:
                     cv2.line(image, (int(mapped_kp[j0][0]), int(mapped_kp[j0][1])), (int(mapped_kp[j1][0]), int(mapped_kp[j1][1])), (0, 255, 255), 2)
+
+        # --- 6. PRINT REPORT (Once after startup) ---
+        if not self.report_printed and len(report_lines) > 0:
+            print("\n📊 LIVE CLASSROOM STATUS:")
+            for line in report_lines:
+                print(line)
+            print("------------------------------------------------")
+            self.report_printed = True
 
         return image
 
