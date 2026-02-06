@@ -1,9 +1,3 @@
-Here is the comprehensive **README.md** update for your **3rd Progress**.
-
-This documentation explains the shift to the **Hybrid Architecture** (NPU for Pose, CPU for Face), the implementation of **Spatial Identity Mapping**, and the final integration of the **Action Logic**.
-
-***
-
 # 🎓 SENSEY: Integrated Classroom Monitoring System (Phase 3)
 
 ### **Hybrid Architecture: Hailo NPU (Pose) + CPU (Identity)**
