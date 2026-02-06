@@ -17,7 +17,7 @@ HEF_PATH = "/home/raspberrypi/hailo-apps/resources/models/hailo8/yolov8m_pose.he
 SNAP_SCRIPT = "/home/raspberrypi/Documents/cpu_process_screenshot.py"
 TRIGGER_FILE = "/home/raspberrypi/Documents/trigger.txt"
 
-cmd_pose = [PYTHON_EXE, POSE_SCRIPT, "--hef-path", HEF_PATH, "--input", "usb", "--show-fps", "--frame-rate", "15"]
+cmd_pose = [PYTHON_EXE, POSE_SCRIPT, "--hef-path", HEF_PATH, "--input", "usb", "--show-fps", "--frame-rate", "15",]
 cmd_snap = [PYTHON_EXE, SNAP_SCRIPT]
 
 if __name__ == "__main__":
