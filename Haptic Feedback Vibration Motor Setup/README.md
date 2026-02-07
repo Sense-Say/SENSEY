@@ -19,7 +19,7 @@ This section provides the "Engineering Context." Understanding **why** we use th
 *   **Why ULN2803A? (The Muscle):**
     Think of this as a row of 8 high-power light switches. The PCA9685 logic signal is too weak to move a motor (it's like trying to start a car with a watch battery). The ULN2803A uses the small PCA9685 signal to "flip the switch" on the high-current 3.3V line.
 *   **Why the MP1584EN? (The Safety Valve):**
-    If you used a simple resistor to drop 5V to 3V, it would get incredibly hot. A Buck Converter is a "Switching Regulator"—it converts voltage efficiently with very little heat. It ensures that even if the UPS battery is fully charged (12.6V) or nearly empty, your motors always see exactly 3.3V.
+    The UPS module has 5V/5A supply and 5V is overkill for vibration motors rated voltage 3V. If you used a simple resistor to drop 5V to 3V, it would get incredibly hot. A Buck Converter is a "Switching Regulator"—it converts voltage efficiently with very little heat. It ensures that even if the UPS battery is fully charged (12.6V) or nearly empty, your motors always see exactly 3.3V.
 
 ---
 
