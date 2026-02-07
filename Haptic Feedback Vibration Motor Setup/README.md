@@ -265,7 +265,7 @@ To keep it compact on the forearm, do not put the Raspberry Pi 5 on the arm. It 
 
 ---
 ---
-### The Haptic Precision GUI
+### 5. The Haptic Precision GUI
 
 ```python
 import tkinter as tk
