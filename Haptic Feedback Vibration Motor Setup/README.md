@@ -76,10 +76,6 @@ finally:
 Since 9 motors can pull ~1A, don't use the very thinnest "jumper wires" for the main power line (the one coming out of the Buck Converter). Use a slightly thicker wire for the **Main +3.3V Rail** and the **Main Ground** to prevent voltage drop.
 
 ---
-Okay, here is the complete and detailed wiring diagram guide, formatted for a GitHub README.md, for your Haptic Feedback Forearm Sleeve.
-
-This guide assumes you are building the "Full Phase" setup with the PCA9685, ULN2803A, and MP1584EN all on the arm, connected by a 4-wire umbilical to the Raspberry Pi and Waveshare UPS at the waist.
-
 ---
 
 # Haptic Feedback Forearm Sleeve: Wiring Guide
