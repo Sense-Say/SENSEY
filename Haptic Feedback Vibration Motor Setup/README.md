@@ -1,5 +1,5 @@
-##
-
+# Haptic Feedback 9 Motors Conceptual Guide
+---
 ## The "Full Phase" Component List
 
 1.  **Raspberry Pi 5**
