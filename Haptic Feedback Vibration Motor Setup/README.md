@@ -15,7 +15,7 @@ This section provides the "Engineering Context." Understanding **why** we use th
 ### 1. The "Why" (Design Logic)
 
 *   **Why PCA9685? (The Brain):**
-    The Raspberry Pi 5 is powerful, but generating 9 precise PWM signals takes up CPU resources and can be jittery if the OS is busy. The PCA9685 "set and forget" logic means you tell it the speed once via I2C, and the chip handles the pulsing perfectly while the Pi moves on to other tasks.
+    The Raspberry Pi 5 is powerful, but generating 9 precise PWM signals takes up CPU resources and can be jittery if the OS is busy. The PCA9685 "set and forget" logic means you tell it the speed once via I2C, and the chip handles the pulsing perfectly while the Pi moves on to other tasks. Also we can avoid the 9 motors direct connection to the RPI5 GPIO pins.
 *   **Why ULN2803A? (The Muscle):**
     Think of this as a row of 8 high-power light switches. The PCA9685 logic signal is too weak to move a motor (it's like trying to start a car with a watch battery). The ULN2803A uses the small PCA9685 signal to "flip the switch" on the high-current 3.3V line.
 *   **Why the MP1584EN? (The Safety Valve):**
