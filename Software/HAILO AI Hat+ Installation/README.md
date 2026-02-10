@@ -59,7 +59,7 @@ Download the required model networks (.hef files) and video resources.
 
 ---
 
-## 🏃 Part 3: Running AI Tasks
+##  Part 3: Running AI Tasks
 
 Ensure your virtual environment is active (`source venv/bin/activate`) and you are in the `hailo-apps` folder.
 
@@ -80,7 +80,7 @@ python runtime/python/detection/detection.py --input /dev/video0
 
 ---
 
-## ℹ️ Part 4: Info & Troubleshooting
+##  Part 4: Info & Troubleshooting
 
 ### Verify Device
 Check if the Hailo-8 (26 TOPS) is recognized.
