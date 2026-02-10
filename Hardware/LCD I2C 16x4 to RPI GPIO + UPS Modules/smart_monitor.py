@@ -50,7 +50,7 @@ def get_accurate_mem_percent():
     # This ignores Buffers/Cache to give you the "App Usage" percentage
     used_mb = mem.used / (1024**2)
     total_mb = mem.total / (1024**2)
-    percentage = (mem.used / mem.total) * 100
+    percentage = (used_mb / total_mb) * 100
     return percentage, used_mb
 
 # ==========================================
@@ -75,15 +75,16 @@ try:
         # Line 2: Temp
         line2 = f"CPU TEMP:{cpu_t:5.1f}C".ljust(16)
         # Line 3: Accurate Memory (Formula: Used/Total)
-        line4 = f"RAM USE  :{mem_p:5.1f}%".ljust(16)
+        line4 = f"RAM USED:{mem_p:5.1f}%".ljust(16)
         # Line 4: CPU Usage
-        line3 = f"CPU USE :{cpu_u:5.1f}%".ljust(16)
+        line3 = f"CPU USED:{cpu_u:5.1f}%".ljust(16)
 
         # 4. Push to LCD
         lcd.cursor_pos = (0, 0); lcd.write_string(line1)
         lcd.cursor_pos = (1, 0); lcd.write_string(line2)
         lcd.cursor_pos = (2, 0); lcd.write_string(line3)
         lcd.cursor_pos = (3, 0); lcd.write_string(line4)
+        
 
         time.sleep(2)
 
