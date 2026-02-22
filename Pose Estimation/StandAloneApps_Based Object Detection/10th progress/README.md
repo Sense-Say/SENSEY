@@ -65,5 +65,38 @@ The master script (`oakd_blind_runner.py`) now operates within a strict State Ma
 5.  **Reverse:** Because you are starting from the end of the file name, the system automatically runs a `.reverse()` on the JSON array and says *"Reversing Route."*
 6.  **Walk:** Follow the audio instructions (e.g., "Walk 3 meters") until you hear *"Arrived at destination."*
 
-## 🔭 Future Progress: Phase 11
-The system is now mathematically complete for blind navigation. The final phase will involve **Contextual Fusion**—merging the Object Detection (YOLO) with the Routing Engine (VIO) so the system can interrupt a routing instruction to warn the user: *"Obstacle detected on path: Chair at 1.5 meters."*
+---
+
+### Voice Command Summary
+
+You trigger the system by pressing the physical button (GPIO 26) and waiting for the "Listening" prompt.
+
+#### 1. Core Actions (From IDLE State)
+*   **"Record `[Route Name]`"** (e.g., *"Record front door to desk"*)
+    *   **Response:** *"You said record front door to desk. Is this correct?"*
+    *   **Action:** Enters confirmation mode. If you answer "Yes," it starts dropping AR waypoints.
+*   **"Go to `[Route Name]`"** or **"Navigate `[Route Name]`"** (e.g., *"Navigate front door to desk"*)
+    *   **Response:** *"You said navigate front door to desk. Is this correct?"*
+    *   **Action:** Enters confirmation mode. If you answer "Yes," it loads the JSON file and projects the green guiding line.
+
+#### 2. Actions During Recording (While in RECORDING State)
+*   **"Point saved"**
+    *   **Response:** *"Point `[X]` saved."*
+    *   **Action:** Immediately tags your current physical (X, Z) coordinate as a landmark in the route. *No confirmation required.*
+*   **"Stop"** or **"Finish"**
+    *   **Response:** *"You said finish. Is this correct?"*
+    *   **Action:** Enters confirmation mode. If you answer "Yes," it saves the JSON file and returns to IDLE.
+
+#### 3. Actions During Navigation (While in NAVIGATING State)
+*   **"Update"**
+    *   **Response:** *"Turn [left/right] X degrees and walk Y meters."*
+    *   **Action:** Instantly recalculates the distance and angle to the next waypoint from your current position.
+*   **"Stop"** or **"Finish"**
+    *   **Response:** *"You said stop. Is this correct?"*
+    *   **Action:** Enters confirmation mode. If you answer "Yes," navigation cancels and returns to IDLE.
+
+#### 4. Universal Confirmation Responses (When asked "Is this correct?")
+*   **"Yes"** or **"Correct"**
+    *   **Action:** Executes the pending command (starts recording, saves file, starts navigating).
+*   **"No"** or **"Wrong"**
+    *   **Action:** Cancels the pending command. If you were recording, it resumes recording. If you were idle, it stays idle.
