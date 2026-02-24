@@ -17,7 +17,7 @@ sys.path.append("/home/raspberrypi/hailo-apps/hailo_apps/python/standalone_apps/
 from pose_estimation_utils import PoseEstPostProcessing
 
 HEF_PATH = "/home/raspberrypi/hailo-apps/resources/models/hailo8/yolov8m_pose.hef"
-FACE_BLOB = "/home/raspberrypi/Documents/face_detector.blob"
+FACE_BLOB = "/home/raspberrypi/Documents/face_detector1.blob"
 
 def create_pipeline():
     pipeline = dai.Pipeline()
