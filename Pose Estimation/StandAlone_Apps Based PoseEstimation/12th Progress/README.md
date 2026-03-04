@@ -57,7 +57,7 @@ To ensure the teacher only reacts to real behavior:
 The system is now 100% offline. Ensure Piper is calibrated for speed:
 *   **Executable:** `~/Documents/piper/piper`
 *   **Voice:** `en_US-lessac-medium.onnx`
-*   **Speed:** Set to **0.85** (Length Scale) for fast, professional reporting.
+*   **Speed:** Set to **1.30** (Length Scale) for normal speed, professional reporting.
 
 ### Hardware Reference
 *   **Camera Height:** 1.2 meters from the floor.
