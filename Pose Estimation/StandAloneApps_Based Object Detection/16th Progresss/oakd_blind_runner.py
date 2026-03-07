@@ -5,9 +5,14 @@ import sys, os, time, math, json, threading, subprocess
 import sounddevice as sd
 import vosk
 import pygame
-
 from hailo_platform import HEF, VDevice, HailoStreamInterface, InferVStreams, ConfigureParams, InputVStreamParams, OutputVStreamParams, FormatType
 from gpiozero import Button
+
+
+is_listening, is_speaking = False, False
+is_recording_note = False
+voice_note_buffer = []  # 🚀 NEW: This will store the audio data
+note_timer_start = 0    # 🚀 NEW: This tracks how long we have been recording
 
 # --- ENV ---
 os.environ["QT_QPA_PLATFORM"] = "xcb"
@@ -33,13 +38,13 @@ MIN_Z_DELTA, MAX_Z_DELTA = 0.01, 0.30
 pygame.mixer.init()
 tick_sound_effect = pygame.mixer.Sound(TICK_SOUND)
 is_ticking = False
-# Global Variables
-STATE = "IDLE"
+
+# --- STATE ---
+STATE = "IDLE" 
 total_dist, current_yaw, last_wp_dist, current_x, current_z = 0.0, 0.0, 0.0, 0.0, 0.0
 recorded_path, nav_path = [], []
 current_route_filename, landmark_count, pending_command, previous_state = "", 0, "", "IDLE"
-is_listening, is_speaking, is_recording_note = False, False, False
-voice_note_buffer = []
+is_listening, is_speaking = False, False
 
 import queue
 audio_queue = queue.Queue()
@@ -59,32 +64,6 @@ def audio_worker():
 # Start this thread once at the beginning of your script
 threading.Thread(target=audio_worker, daemon=True).start()
 
-def play_sequence(inst):
-    global is_speaking
-    is_speaking = True
-    
-    # 1. Announce Arrival
-    print(f"🔊 Sequence: Reached {inst['label']}")
-    subprocess.run(f'echo "Reached {inst["label"]}." | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
-    
-    # 2. 🚀 PAUSE 1.5 Seconds before playing note
-    time.sleep(1.5)
-    
-    # 3. Play the actual WAV file (The note)
-    note = inst["note_file"]
-    if note and note.endswith(".wav"):
-        note_path = os.path.join(DOC_PATH, note)
-        if os.path.exists(note_path):
-            print(f"🔊 Sequence: Playing {note_path}")
-            subprocess.run(['aplay', '-q', note_path])
-            
-    # 4. Announce the Next Turn
-    if inst.get("next_instruction"):
-        print(f"🔊 Sequence: {inst['next_instruction']}")
-        subprocess.run(f'echo "{inst["next_instruction"]}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
-    
-    is_speaking = False
-
 class NavigationManager:
     def __init__(self):
         self.path = []
@@ -95,9 +74,9 @@ class NavigationManager:
         self.offset_x, self.offset_z, self.offset_yaw = 0.0, 0.0, 0.0
         self.stride_length = 0.75 
         self.last_arrival_time = 0.0
-
+        
     def load_path(self, path_data):
-        """🚀 CLEW AUTO-TURN LOGIC: Filters out tiny segments."""
+        """🚀 CLEW AUTO-TURN LOGIC: Analyzes breadcrumbs to find corners."""
         raw_nodes = []
         for p in path_data:
             raw_nodes.append({
@@ -109,15 +88,11 @@ class NavigationManager:
         self.path = [raw_nodes[0]] 
         for i in range(1, len(raw_nodes) - 1):
             prev, curr, next_n = raw_nodes[i-1], raw_nodes[i], raw_nodes[i+1]
-            
-            # Calculate segment length
             seg_dist = math.sqrt((curr['x'] - self.path[-1]['x'])**2 + (curr['z'] - self.path[-1]['z'])**2)
-            
             angle1 = math.atan2(curr['x'] - prev['x'], curr['z'] - prev['z'])
             angle2 = math.atan2(next_n['x'] - curr['x'], next_n['z'] - curr['z'])
             diff = abs(math.degrees(angle2 - angle1 + math.pi) % 360 - 180)
             
-            # 🚀 FIX: Only keep nodes if they are > 0.6m away OR a major turn
             if seg_dist > 0.6 or diff > 30 or curr['note'] != "":
                 self.path.append(curr)
         
@@ -125,7 +100,6 @@ class NavigationManager:
         self.active = True
         self.current_wp_index = 1 if len(self.path) > 1 else 0
         self.offset_x, self.offset_z, self.offset_yaw = 0, 0, 0
-        print(f"🚀 Path loaded. Compressed into {len(self.path)} navigation nodes.")
 
     def get_human_direction(self, target_yaw, current_yaw):
         error = (target_yaw - current_yaw + 180) % 360 - 180
@@ -276,9 +250,10 @@ def execute_action(cmd):
 
 def handle_voice_command(cmd):
     global STATE, pending_command, is_listening, recorded_path, landmark_count, current_x, current_z, current_yaw, previous_state
+    global mic_stream, native_rate, mic_idx, audio_callback, rec
+    
     cmd = cmd.lower().strip()
     if not cmd: return
-
     print(f"✅ Voice Input: {cmd} (State: {STATE})")
 
     if STATE == "CONFIRM_START":
@@ -291,20 +266,60 @@ def handle_voice_command(cmd):
         else: STATE = previous_state; speak_offline("Resuming.")
         pending_command = ""
 
+    # 🚀 REVISED: RUNS SAFELY IN BACKGROUND THREAD
     elif STATE == "CONFIRM_NOTE":
         if "yes" in cmd or "correct" in cmd:
             STATE = "RECORDING_NOTE"
-            speak_offline("Say your voice note now.")
-            is_listening = True
-        else:
-            STATE = "RECORDING"
-            speak_offline("Continuing recording.")
+            
+            print("🔊 Prompting: Start")
+            subprocess.run(f'echo "Start" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True) 
+            
+            # 1. Safely stop the mic 
+            try:
+                mic_stream.stop()
+                mic_stream.close()
+                time.sleep(0.5) 
+            except: pass
+            
+            # 2. Record using arecord
+            note_filename = f"{current_route_filename}_note_{landmark_count}.wav"
+            note_path = os.path.join(DOC_PATH, note_filename)
+            print(f"🎙️ Recording 5s: {note_filename}")
+            
+            subprocess.run(['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'])
+            
+            try:
+                subprocess.run(['arecord', '-d', '5', '-f', 'S16_LE', '-r', '44100', '-c', '1', note_path], check=True)
+                if len(recorded_path) > 0:
+                    recorded_path[-1][4] = note_filename
+                print(f"✅ Saved to {note_path}")
+            except Exception as e:
+                print(f"🔴 arecord Error: {e}")
+                
+            subprocess.run(['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'])
+            
+            print("✅ Recording finished. Saving...")
+            subprocess.run(f'echo "Voice note saved. Continue recording." | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
 
-    elif STATE == "RECORDING_NOTE":
-        if len(recorded_path) > 0:
-            recorded_path[-1][4] = cmd 
-        STATE = "RECORDING"
-        speak_offline("Voice note saved. Continuing recording.")
+            # 3. Safely restart the mic
+            try:
+                rec.Reset()
+                mic_stream = sd.InputStream(
+                    samplerate=native_rate, 
+                    device=mic_idx, 
+                    channels=1, 
+                    dtype='float32', 
+                    blocksize=4000, 
+                    callback=audio_callback
+                )
+                mic_stream.start()
+                print("👂 Vosk Listener Resumed.")
+            except Exception as e:
+                print(f"🔴 Mic Restart Error: {e}")
+                
+            STATE = "RECORDING"
+        else:
+            STATE = "RECORDING"; speak_offline("Continuing recording.")
 
     elif STATE == "RECORDING":
         if "point" in cmd and "saved" in cmd:
@@ -321,9 +336,15 @@ def handle_voice_command(cmd):
         if "update" in cmd:
             status = nav_engine.get_instruction(current_x, current_z, current_yaw, is_on_demand=True)
             if status: speak_offline(status)
+        elif "pause" in cmd:
+            STATE = "PAUSED"; speak_offline("Navigation paused.")
         elif "finish" in cmd or "stop" in cmd:
             pending_command = "stop"; previous_state = "NAVIGATING"; STATE = "CONFIRM_FINISH"
             speak_offline("Stop navigation. Is this correct?"); is_listening = True 
+
+    elif STATE == "PAUSED":
+        if "resume" in cmd:
+            STATE = "NAVIGATING"; speak_offline("Resuming navigation.")
 
     else: # IDLE
         if any(x in cmd for x in ["record", "go to", "navigate"]):
@@ -388,6 +409,32 @@ def get_pipeline():
     
     return p
 
+def play_sequence(inst):
+    global is_speaking
+    is_speaking = True
+    
+    # 1. Announce Arrival
+    print(f"🔊 Sequence: Reached {inst['label']}")
+    subprocess.run(f'echo "Reached {inst["label"]}." | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
+    
+    # 2. 🚀 PAUSE 1.5 Seconds before playing note
+    time.sleep(1.5)
+    
+    # 3. Play the actual WAV file (The note)
+    note = inst["note_file"]
+    if note and note.endswith(".wav"):
+        note_path = os.path.join(DOC_PATH, note)
+        if os.path.exists(note_path):
+            print(f"🔊 Sequence: Playing {note_path}")
+            subprocess.run(['aplay', '-q', note_path])
+            
+    # 4. Announce the Next Turn
+    if inst.get("next_instruction"):
+        print(f"🔊 Sequence: {inst['next_instruction']}")
+        subprocess.run(f'echo "{inst["next_instruction"]}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
+    
+    is_speaking = False
+
 def run():
     global total_dist, current_yaw, last_wp_dist, recorded_path, nav_path, is_listening, is_speaking, STATE, current_x, current_z
     global mic_stream, native_rate, mic_idx, audio_callback, rec, vosk_model
@@ -415,7 +462,6 @@ def run():
     out_p = OutputVStreamParams.make(group, format_type=FormatType.FLOAT32)
     input_name = hef.get_input_vstream_infos()[0].name
     
-    # 🚀 FIX: RESTORED BUTTON INITIALIZATION
     try: 
         btn = Button(26, pull_up=True)
         btn.when_pressed = trigger_listening
@@ -430,16 +476,19 @@ def run():
     def audio_callback(indata, frames, time_info, status):
         global is_listening, is_speaking, is_recording_note
         if is_recording_note or not is_listening or is_speaking: return
-        mono_data = np.mean(indata, axis=1) if indata.shape[1] > 1 else indata.flatten()
-        audio = (mono_data * 32768).astype('int16')
-        num_s = int(len(audio) * 16000 / native_rate)
-        resampled = audio[np.linspace(0, len(audio) - 1, num_s).astype(int)]
-        if rec.AcceptWaveform(resampled.tobytes()):
-            result = json.loads(rec.Result()); cmd = result.get('text', '')
-            if cmd: 
-                is_listening = False
-                threading.Thread(target=handle_voice_command, args=(cmd,), daemon=True).start()
-                rec.Reset()
+        try:
+            mono_data = np.mean(indata, axis=1) if indata.shape[1] > 1 else indata.flatten()
+            audio = (mono_data * 32768).astype('int16')
+            num_s = int(len(audio) * 16000 / native_rate)
+            resampled = audio[np.linspace(0, len(audio) - 1, num_s).astype(int)]
+            if rec.AcceptWaveform(resampled.tobytes()):
+                result = json.loads(rec.Result()); cmd = result.get('text', '')
+                if cmd: 
+                    is_listening = False
+                    # 🚀 THIS THREADING CALL MAKES THE BACKGROUND RECORDING POSSIBLE
+                    threading.Thread(target=handle_voice_command, args=(cmd,), daemon=True).start()
+                    rec.Reset()
+        except: pass
 
     with dai.Device(get_pipeline()) as device:
         try:
@@ -455,14 +504,14 @@ def run():
             with InferVStreams(group, in_p, out_p) as pipe:
                 print("✅ SENSEY Ready."); speak_offline("System Ready.")
                 
+                # 🚀 THERE IS ONLY ONE 'WHILE TRUE' LOOP NOW
                 while True:
                     # 🚀 2. IMU FUSION & YAW SMOOTHING
                     imuData = q_imu.tryGetAll() 
                     
-                    # 🚀 FIX: Initialize these variables so they are accessible outside the loop
                     ax, ay, az = 0.0, 0.0, 0.0 
                     gx, gy, gz = 0.0, 0.0, 0.0
-                    is_stepping = False # Initialize step gate
+                    is_stepping = False 
                     
                     for data in imuData:
                         for packet in data.packets:
@@ -479,9 +528,9 @@ def run():
                             current_yaw = (current_yaw + 180) % 360 - 180
                             smooth_yaw = (0.8 * smooth_yaw) + (0.2 * current_yaw)
                             
-                            # 🚀 STEP DETECTION: Logic based on current packet
+                            # STEP DETECTION
                             accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
-                            if abs(accel_mag - 9.81) > 0.2: # Threshold 0.2
+                            if abs(accel_mag - 9.81) > 0.2: 
                                 is_stepping = True
 
                     # 🚀 3. FETCH SENSOR FRAMES
@@ -499,27 +548,20 @@ def run():
                                     ymin, xmin, ymax, xmax = det[:4]
                                     active_boxes.append([int(xmin*1344), int(ymin*1008), int(xmax*1344), int(ymax*1008)])
 
-                    # 🚀 5. MOTION-FILTERED PEDOMETER
-                    # 🚀 4. MOTION-FILTERED PEDOMETER (Always running)
+                    # 🚀 5. MOTION-FILTERED PEDOMETER 
                     deltas = []
                     is_rotating = abs(gz) > 0.1 or abs(gx) > 0.1
                     
-                    # Check for physical step (IMU Jolt)
-                    accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
-                    is_stepping = abs(accel_mag - 9.81) > 0.3
-
-                    # We track features if we are NOT rotating, regardless of state
-                    # Inside the pedometer loop:
+                    # We track features if we are NOT rotating
                     if not is_rotating:
                         for f in fea_data:
                             x, y = int(f.position.x), int(f.position.y)
                             dx, dy = int(x * 1344/640), int(y * 1008/480)
                             
-                            # 🟢 VISUALIZER: Draw ALL tracked features (Yellow)
+                            # Draw ALL tracked features (Yellow)
                             cv2.circle(rgb_isp, (dx, dy), 2, (0, 255, 255), -1)
                             
                             if 0 <= dy < 1008 and 0 <= dx < 1344:
-                                # Masking (Red dots if on object)
                                 is_on_obj = any(b[0]<=dx<=b[2] and b[1]<=dy<=b[3] for b in active_boxes)
                                 if is_on_obj: 
                                     cv2.circle(rgb_isp, (dx, dy), 2, (0, 0, 255), -1)
@@ -531,7 +573,7 @@ def run():
                                         d_z = feat_history[f.id] - z
                                         if abs(d_z) < 0.40: 
                                             deltas.append(d_z)
-                                            # 🔴 VISUALIZER: Draw RED dots for movement
+                                            # Draw RED dots for movement
                                             cv2.circle(rgb_isp, (dx, dy), 4, (0, 0, 255), -1)
                                     feat_history[f.id] = z
                     
@@ -540,29 +582,55 @@ def run():
                     # 🚀 APPLY PEDOMETER MATH
                     if deltas:
                         avg_step = sum(deltas) / len(deltas)
-                        # Only add distance if we are physically stepping forward
                         if is_stepping and avg_step > 0.005:
                             total_dist += (avg_step * CALIBRATION_SCALE)
                             rad_yaw = math.radians(current_yaw)
                             current_x = total_dist * math.sin(rad_yaw)
                             current_z = total_dist * math.cos(rad_yaw)
 
-                    # 🚀 5. NAVIGATION LOGIC (Only runs when NAVIGATING)
+                    # 🚀 6. NAVIGATION LOGIC
                     if STATE == "NAVIGATING":
-                        # Get instruction (returns dict or None)
-                        inst = nav_engine.get_instruction(current_x, current_z, current_yaw)
+                        # DYNAMIC SAFETY OVERRIDE
+                        path_blocked = False
+                        critical_warning = ""
                         
-                        if inst:
-                            if isinstance(inst, dict):
-                                if inst["type"] == "text":
-                                    threading.Thread(target=speak_offline, args=(inst["msg"],), daemon=True).start()
-                                elif inst["type"] == "arrival":
-                                    threading.Thread(target=play_sequence, args=(inst,), daemon=True).start()
-                            else:
-                                threading.Thread(target=speak_offline, args=(inst,), daemon=True).start()
+                        if len(raw_dets) > 0:
+                            for class_list in (raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
+                                for det in class_list:
+                                    if len(det) >= 5 and det[4] > 0.45:
+                                        ymin, xmin, ymax, xmax = det[:4]
+                                        cx = (xmin + xmax) / 2
+                                        sample_y, sample_x = int((ymin+ymax)/2*1008), int(cx*1344)
+                                        sample_y = max(0, min(1007, sample_y))
+                                        sample_x = max(0, min(1343, sample_x))
+                                        obj_z = depth_raw[sample_y, sample_x] / 1000.0
+                                        
+                                        if 0.1 < obj_z < 0.6:
+                                            path_blocked = True
+                                            if cx < 0.33: critical_warning = "Object very close on left."
+                                            elif cx > 0.66: critical_warning = "Object very close on right."
+                                            else: critical_warning = "Object directly in front. Stop."
+                                            break
+                                        elif 0.33 < cx < 0.66 and 0.6 <= obj_z < 1.2:
+                                            path_blocked = True
+                                            critical_warning = "Path blocked ahead."
+                                            break
                         
-                        # Play Tick
-                        play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
+                        if path_blocked:
+                            if is_ticking:
+                                tick_sound_effect.stop()
+                                is_ticking = False
+                            if not is_speaking:
+                                threading.Thread(target=speak_offline, args=(critical_warning,), daemon=True).start()
+                        else:
+                            if not is_speaking:
+                                inst = nav_engine.get_instruction(current_x, current_z, current_yaw)
+                                if inst: 
+                                    if isinstance(inst, dict):
+                                        if inst["type"] == "text": threading.Thread(target=speak_offline, args=(inst["msg"],), daemon=True).start()
+                                        elif inst["type"] == "arrival": threading.Thread(target=play_sequence, args=(inst,), daemon=True).start()
+                                    else: threading.Thread(target=speak_offline, args=(inst,), daemon=True).start()
+                            play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
 
                     processed = inference_result_handler(
                         rgb_isp, raw_dets, LABELS, CONFIG_DATA, 
@@ -571,8 +639,11 @@ def run():
                         target_dist=nav_engine.distance_to_wp if STATE == "NAVIGATING" else None,
                         depth_frame=depth_raw, state_text=STATE
                     )
+                    
+                    # 🚀 RENDER UI
                     cv2.imshow("SENSEY 6-DOF AR Navigator", cv2.resize(processed, (1024, 768)))
                     if cv2.waitKey(1) == ord('q'): break
+                    
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
