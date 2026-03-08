@@ -61,14 +61,6 @@ The implemented code enforces an intuitive chain via Global State Machine constr
 ***
 ---
 
-# 18th Progress: Ordinal Memory Slots, Conversational UX & Thread-Safe PyAudio
-
-## 🚀 Overview
-The 18th progress solves two of the most notoriously difficult problems in assistive wearables: **Speech-to-Text (STT) accuracy** in offline edge environments, and **concurrent Linux audio-hardware management**. 
-
-Instead of relying on the user to dictate complex path names (which offline models frequently mishear), we transitioned to an **Ordinal "Save Slot" architecture**. We also engineered a robust, non-blocking conversational flow and finally resolved the severe PulseAudio threading crashes by pivoting to a specialized PyAudio stream handler for capturing user Voice Notes.
-
----
 
 ## 🛠 Key Technical Enhancements & Code Implementation
 
