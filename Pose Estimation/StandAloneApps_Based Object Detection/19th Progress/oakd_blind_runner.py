@@ -564,7 +564,8 @@ def get_pipeline():
     cam.setPreviewSize(640, 640)
     cam.setPreviewKeepAspectRatio(False) 
     cam.initialControl.setManualFocus(0) 
-
+    cam.setFps(20) 
+    
     # Mono Cameras
     left = p.create(dai.node.MonoCamera)
     left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
@@ -593,8 +594,8 @@ def get_pipeline():
     
     # Feature Tracker
     feat = p.create(dai.node.FeatureTracker)
-    feat.setHardwareResources(2, 2)
-    feat.initialConfig.setNumTargetFeatures(320)
+    feat.setHardwareResources(1, 1)
+    feat.initialConfig.setNumTargetFeatures(100)
     left.out.link(feat.inputImage)
     
     # 🚀 FIX: Correct link for AprilTag node (Must be inputImage)
@@ -638,29 +639,40 @@ def play_sequence(inst):
     
     is_speaking = False
 #---------------------------------------------------------------------------------------------------------------------
-# 🚀 8-Tag Cardinal Map (ID : Yaw)
+# 🚀 8-Tag Cardinal Map (Tag ID : World Yaw)
 TAG_MAP = {
-    0: 0.0,    # North (Whiteboard)
+    0: 0.0,    # North
     1: 45.0,   # NE
-    2: 90.0,   # East (Window)
+    2: 90.0,   # East
     3: 135.0,  # SE
-    4: 180.0,  # South (Back)
+    4: 180.0,  # South
     5: 225.0,  # SW
-    6: 270.0,  # West (Locker)
+    6: 270.0,  # West
     7: 315.0   # NW
 }
 
-def handle_april_tags(april_data, current_yaw):
+def handle_april_tags(april_data, current_yaw, width):
     """
-    🚀 THE SNAP: Gently adjusts the current_yaw to match the Tag's known World Yaw.
+    🚀 UNIFIED BOUNDARY LOGIC: 
+    Only snaps if the tag is inside the center 1/3 of the screen.
     """
+    l_lim = width // 3
+    r_lim = (width // 3) * 2
+    
+    # Iterate through detected tags
     for det in april_data.aprilTags:
-        if det.id in TAG_MAP:
-            target_yaw = TAG_MAP[det.id]
-            # Soft reset: shift 5% per frame toward the correct heading
-            yaw_error = (target_yaw - current_yaw + 180) % 360 - 180
-            current_yaw += (yaw_error * 0.05) 
-            print(f"⚓ Tag {det.id} detected! Drift corrected.")
+        # Calculate center of the tag in pixels
+        tag_center_x = (det.topLeft.x + det.topRight.x + det.bottomRight.x + det.bottomLeft.x) / 4
+        
+        # Only snap if tag is in the CENTER ZONE
+        if l_lim < tag_center_x < r_lim:
+            if det.id in TAG_MAP:
+                target_world_yaw = TAG_MAP[det.id]
+                
+                # SNAP: Instantly align to the tag's true heading
+                current_yaw = target_world_yaw
+                print(f"⚓ ANCHOR SNAPPED! Tag {det.id} in center. Yaw corrected to {int(current_yaw)}°")
+                
     return current_yaw
 
 #--------------------------------------------------------------------------------------------------------------------
@@ -782,12 +794,11 @@ def run():
                     rgb_isp = q_isp.get().getCvFrame(); rgb_pre = q_pre.get().getCvFrame() 
                     depth_raw = q_dep.get().getFrame(); fea_data = q_fea.get().trackedFeatures
                     
-                    # 🚀 ADD THIS: Check for AprilTags here
-                    april_data = q_apr.tryGet()
-                    if april_data is not None:
-                        for tag in april_data.aprilTags: # <--- Must be aprilTags
-                            tag_id = tag.id
-                            print(f"🎯 DETECTED TAG ID: [{tag_id}]")
+                    # 🚀 APRILTAG SNAP (Add this immediately after fetching frames)
+                    april_in = q_apr.tryGet()
+                    if april_in:
+                        # 1024 is your screen width
+                        current_yaw = handle_april_tags(april_in, current_yaw, width=1024)
                     
                     # 🚀 4. AI INFERENCE (Masking)
                     res = pipe.infer({input_name: np.expand_dims(rgb_pre, axis=0)})
