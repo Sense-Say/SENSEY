@@ -324,19 +324,19 @@ def execute_action(cmd):
                     
                     if is_reverse:
                         nav_path.reverse()
-                        speak_offline("Reversing route. Please turn around.")
+                        audio_queue.put({"type": "text", "msg": "Reversing route. Please turn around."})
                     else:
-                        speak_offline("Navigating.")
+                        audio_queue.put({"type": "text", "msg": "Navigating."})
                         
                     STATE = "NAVIGATING"
                     total_dist, current_yaw, current_x, current_z = 0.0, 0.0, 0.0, 0.0
                     nav_engine.load_path(nav_path)
                     
-                    # Say the first command automatically
+                    # 🚀 SEND THE STATUS DICTATION STRAIGHT INTO THE SAME MANAGED AUDIO QUEUE 
                     first_upd = nav_engine.get_instruction(0, 0, current_yaw, is_on_demand=True)
                     if first_upd:
-                        # Schedule standard Piper call
-                        threading.Thread(target=speak_offline, args=(first_upd,), daemon=True).start()
+                        audio_queue.put({"type": "text", "msg": first_upd})
+
             except Exception as e:
                 print(f"Load error: {e}")
                 speak_offline("Failed to load destination data.")
@@ -369,6 +369,9 @@ def handle_voice_command(cmd):
                 speak_offline(f"Destination {num} is {alias}.")
             else:
                 speak_offline("Destination not specified.")
+                
+            # 🚀 FIX: We REMOVED `is_listening = True` from here! 
+            # It now safely exits, allowing you to press Button 26 again naturally.
 
         elif any(x in cmd for x in ["record", "go to", "navigate"]):
             pending_command = cmd
@@ -740,11 +743,13 @@ def run():
                             current_x = total_dist * math.sin(rad_yaw)
                             current_z = total_dist * math.cos(rad_yaw)
 
-                    # 🚀 6. NAVIGATION LOGIC
+                    # 🚀 6. NAVIGATION LOGIC (Only runs when NAVIGATING)
                     if STATE == "NAVIGATING":
                         # DYNAMIC SAFETY OVERRIDE
                         path_blocked = False
                         critical_warning = ""
+                        
+                        global is_ticking # 🚀 Force explicit inheritance here locally!
                         
                         if len(raw_dets) > 0:
                             for class_list in (raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
@@ -773,18 +778,17 @@ def run():
                                 tick_sound_effect.stop()
                                 is_ticking = False
                             if not is_speaking:
+                                # We enforce an instant warning dump on an imminent threat without wait buffering 
                                 threading.Thread(target=speak_offline, args=(critical_warning,), daemon=True).start()
                         else:
                             if not is_speaking:
-                                # Get instruction pushes audio to the queue automatically now
                                 inst = nav_engine.get_instruction(current_x, current_z, current_yaw)
-                                if inst: 
-                                    threading.Thread(target=speak_offline, args=(inst,), daemon=True).start()
-                                    
-                    # 🚀 FIX: Move play_navigation_tick OUTSIDE the if STATE == "NAVIGATING" block!
-                    # This ensures that when STATE changes to IDLE, this function still runs once 
-                    # to realize it shouldn't be ticking and forces tick_sound_effect.stop().
-                    play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
+                                
+                                if inst:
+                                    # Since earlier revisions pushed output handling as nested strings directly instead of distinct subdictionaries here
+                                    audio_queue.put({"type": "text", "msg": inst})
+
+                            play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
 
                     processed = inference_result_handler(
                         rgb_isp, raw_dets, LABELS, CONFIG_DATA, 
