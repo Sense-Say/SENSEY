@@ -1,0 +1,804 @@
+import cv2
+import depthai as dai
+import numpy as np
+import sys, os, time, math, json, threading, subprocess
+import sounddevice as sd
+import vosk
+import pygame
+from hailo_platform import HEF, VDevice, HailoStreamInterface, InferVStreams, ConfigureParams, InputVStreamParams, OutputVStreamParams, FormatType
+from gpiozero import Button
+
+
+is_listening, is_speaking = False, False
+is_recording_note = False
+voice_note_buffer = []  # 🚀 THE SPONGE: Stores audio chunks
+note_recording_start_time = 0.0 # Tracks the 5-second limit
+
+# --- ENV ---
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ["DISPLAY"] = ":0"
+os.environ["HAILO_SCHEDULER"] = "1"
+DOC_PATH = "/home/raspberrypi/Documents/"
+REPO_ROOT = "/home/raspberrypi/hailo-apps"
+sys.path.append(REPO_ROOT)
+from hailo_apps.python.standalone_apps.object_detection.object_detection_post_process import inference_result_handler
+
+# --- CONFIG ---
+HEF_PATH = "/home/raspberrypi/hailo-apps/resources/models/hailo8/yolov8m.hef"
+VOSK_MODEL_PATH = "/home/raspberrypi/Downloads/vosk-model-en-us-0.22-lgraph"
+PIPER_EXE = "/home/raspberrypi/Documents/piper/piper"
+PIPER_MODEL = "/home/raspberrypi/Documents/piper/en_US-lessac-medium.onnx"
+TICK_SOUND = "/home/raspberrypi/Downloads/watch_tick.wav"
+LABELS = ["person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
+CONFIG_DATA = {"visualization_params": {"score_thres": 0.5, "max_boxes_to_draw": 50}}
+
+# 🚀 EXPANDED DICTIONARY (Ordinals, Destinations, Reverse, Identify added)
+ALLOWED_WORDS = [
+    "record", "finish", "go", "to", "point", "saved", "front", "back", "door", "desk", 
+    "window", "stop", "navigate", "start", "yes", "no", "correct", "wrong", "update", 
+    "pause", "resume", "[unk]", "first", "second", "third", "fourth", "fifth", "sixth", 
+    "seventh", "eighth", "ninth", "tenth", "destination", "reverse", "identify", "one", "two", "three"
+]
+
+MIN_Z_DELTA, MAX_Z_DELTA = 0.01, 0.30
+
+# --- AUDIO INIT ---
+pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+tick_sound_effect = pygame.mixer.Sound(TICK_SOUND)
+is_ticking = False
+
+# 🚀 NEW: Load your custom sound effects via Pygame to prevent 'Static'
+try:
+    start_beep_sound = pygame.mixer.Sound("/home/raspberrypi/Downloads/recording_notes.wav")
+    arrival_sound = pygame.mixer.Sound("/home/raspberrypi/Downloads/arrived_destination.wav")
+except Exception as e:
+    print(f"⚠️ Warning: Could not load custom sounds. {e}")
+    # Fallback to standard beep if your files are missing
+    start_beep_sound = None
+    arrival_sound = None
+
+# --- STATE & ROUTE VARIABLES ---
+STATE = "IDLE" 
+total_dist, current_yaw, last_wp_dist, current_x, current_z = 0.0, 0.0, 0.0, 0.0, 0.0
+recorded_path, nav_path = [], []
+current_route_filename, landmark_count, pending_command, previous_state = "", 0, "", "IDLE"
+
+# 🚀 ALIAS/MAPPING VARS
+pending_route_key = ""    # Will store e.g., 'destination_1'
+pending_route_alias = ""  # Will store e.g., 'front door to desk'
+NAME_MAP_FILE = os.path.join(DOC_PATH, "name_map.json")
+
+def get_ordinal_key(text):
+    """Maps spoken words 'first' to file prefix 'destination_1'"""
+    ord_map = {
+        "first": "1", "one": "1", "second": "2", "two": "2", "third": "3", "three": "3", 
+        "fourth": "4", "four": "4", "fifth": "5", "five": "5", "sixth": "6", 
+        "seventh": "7", "eighth": "8", "ninth": "9", "tenth": "10"
+    }
+    for word, num in ord_map.items():
+        if word in text: return f"destination_{num}", num
+    return None, None
+
+import queue
+audio_queue = queue.Queue()
+
+def audio_worker():
+    """🚀 THE SINGLE-THREADED AUDIO MANAGER: Plays one thing at a time."""
+    while True:
+        cmd = audio_queue.get()
+        if cmd['type'] == 'text':
+            subprocess.run(f'echo "{cmd["msg"]}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
+        elif cmd['type'] == 'wav':
+            # This is used for your recorded voice notes (which are already formatted perfectly for aplay)
+            subprocess.run(['aplay', '-q', cmd['path']])
+        elif cmd['type'] == 'beep':
+            if start_beep_sound: 
+                start_beep_sound.play()
+                time.sleep(start_beep_sound.get_length())
+            else:
+                subprocess.run(['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'])
+        
+        # 🚀 FIX: Handle the arrival sound using Pygame
+        elif cmd['type'] == 'arrival':
+            if arrival_sound:
+                arrival_sound.play()
+                # Wait for the exact length of the sound to finish before Piper speaks
+                time.sleep(arrival_sound.get_length()) 
+                
+        audio_queue.task_done()
+
+# Start this thread once at the beginning of your script
+threading.Thread(target=audio_worker, daemon=True).start()
+
+class NavigationManager:
+    def __init__(self):
+        self.path = []
+        self.current_wp_index = 0
+        self.active = False
+        self.target_yaw = 0.0
+        self.distance_to_wp = 0.0
+        self.offset_x, self.offset_z, self.offset_yaw = 0.0, 0.0, 0.0
+        self.stride_length = 0.75 
+        self.last_arrival_time = 0.0
+        
+    def load_path(self, path_data):
+        """🚀 CLEW AUTO-TURN LOGIC: Analyzes breadcrumbs to find corners."""
+        raw_nodes = []
+        for p in path_data:
+            raw_nodes.append({
+                "x": p[0], "z": p[1], "label": p[2], 
+                "yaw": p[3] if len(p) > 3 else 0.0,
+                "note": p[4] if len(p) > 4 else ""
+            })
+        
+        self.path = [raw_nodes[0]] 
+        for i in range(1, len(raw_nodes) - 1):
+            prev, curr, next_n = raw_nodes[i-1], raw_nodes[i], raw_nodes[i+1]
+            seg_dist = math.sqrt((curr['x'] - self.path[-1]['x'])**2 + (curr['z'] - self.path[-1]['z'])**2)
+            angle1 = math.atan2(curr['x'] - prev['x'], curr['z'] - prev['z'])
+            angle2 = math.atan2(next_n['x'] - curr['x'], next_n['z'] - curr['z'])
+            diff = abs(math.degrees(angle2 - angle1 + math.pi) % 360 - 180)
+            
+            if seg_dist > 0.6 or diff > 30 or curr['note'] != "":
+                self.path.append(curr)
+        
+        self.path.append(raw_nodes[-1]) 
+        self.active = True
+        self.current_wp_index = 1 if len(self.path) > 1 else 0
+        self.offset_x, self.offset_z, self.offset_yaw = 0, 0, 0
+
+    def get_human_direction(self, target_yaw, current_yaw):
+        error = (target_yaw - current_yaw + 180) % 360 - 180
+        if -22.5 <= error <= 22.5: return "straight ahead"
+        elif 22.5 < error <= 67.5: return "front right"
+        elif 67.5 < error <= 112.5: return "to your right side"
+        elif 112.5 < error <= 157.5: return "back right"
+        elif -67.5 <= error < -22.5: return "front left"
+        elif -112.5 <= error < -67.5: return "to your left side"
+        elif -157.5 <= error < -112.5: return "back left"
+        else: return "directly behind you"
+
+    def get_instruction(self, cur_x, cur_z, cur_yaw, is_on_demand=False):
+        global STATE
+        if not self.active or self.current_wp_index >= len(self.path): return None
+        
+        target = self.path[self.current_wp_index]
+        tx, tz = target["x"] + self.offset_x, target["z"] + self.offset_z
+        self.distance_to_wp = math.sqrt((tx - cur_x)**2 + (tz - cur_z)**2)
+        self.target_yaw = math.degrees(math.atan2(tx - cur_x, tz - cur_z)) % 360
+        
+        direction_word = self.get_human_direction(self.target_yaw, cur_yaw)
+        steps = max(1, int(self.distance_to_wp / self.stride_length))
+
+        if is_on_demand:
+            return f"Target is {direction_word}. Walk {steps} steps."
+
+        # Arrival Logic (Distance < 0.45m)
+# ... inside get_instruction ...
+        if self.distance_to_wp < 0.45:
+            # 1. Queue the "Reached Point" message
+            audio_queue.put({"type": "text", "msg": f"Reached {target['label']}."})
+            
+            # 2. Play voice note if it exists
+            if target['note'] and target['note'].endswith(".wav"):
+                note_full_path = os.path.join(DOC_PATH, target['note'])
+                if os.path.exists(note_full_path):
+                    audio_queue.put({"type": "wav", "path": note_full_path})
+            
+            self.current_wp_index += 1
+            
+            # 🚀 3. THE FIXED FINAL DESTINATION LOGIC
+            if self.current_wp_index >= len(self.path):
+                self.active = False
+                STATE = "IDLE" # Forcefully end navigation visually
+                
+                # Push the Pygame sound to the queue
+                audio_queue.put({"type": "arrival"})
+                
+                # Push the final speech (It will wait for the sound to finish automatically)
+                audio_queue.put({"type": "text", "msg": "Arrived at destination. Navigation ended."})
+                
+                return None             
+            # If NOT final destination, queue the next turn instruction
+            next_target = self.path[self.current_wp_index]
+            nx, nz = next_target["x"] + self.offset_x, next_target["z"] + self.offset_z
+            next_yaw = math.degrees(math.atan2(nx - tx, nz - tz)) % 360
+            next_direction = self.get_human_direction(next_yaw, cur_yaw)
+            
+            if "ahead" in next_direction:
+                audio_queue.put({"type": "text", "msg": "Continue straight."})
+            else:
+                audio_queue.put({"type": "text", "msg": f"Turn {next_direction}."})
+                
+            return None
+                
+        return None
+
+    def get_path_remaining_distance(self, cur_x, cur_z):
+        if not self.active or self.current_wp_index >= len(self.path): return 0.0
+        target = self.path[self.current_wp_index]
+        d = math.sqrt((target["x"] + self.offset_x - cur_x)**2 + (target["z"] + self.offset_z - cur_z)**2)
+        for i in range(self.current_wp_index, len(self.path) - 1):
+            p1, p2 = self.path[i], self.path[i+1]
+            d += math.sqrt((p2["x"] - p1["x"])**2 + (p2["z"] - p1["z"])**2)
+        return d
+
+    def get_path_remaining_distance(self, cur_x, cur_z):
+        # This is used for the HUD display if you want total remaining distance
+        if not self.active or self.current_wp_index >= len(self.path): return 0.0
+        target = self.path[self.current_wp_index]
+        d = math.sqrt((target["x"] + self.offset_x - cur_x)**2 + (target["z"] + self.offset_z - cur_z)**2)
+        for i in range(self.current_wp_index, len(self.path) - 1):
+            p1, p2 = self.path[i], self.path[i+1]
+            d += math.sqrt((p2["x"] - p1["x"])**2 + (p2["z"] - p1["z"])**2)
+        return d
+
+nav_engine = NavigationManager()
+
+def play_navigation_tick(current_yaw, target_yaw, screen_width=1024):
+    global is_ticking
+    if target_yaw is None or STATE != "NAVIGATING":
+        if is_ticking: tick_sound_effect.stop(); is_ticking = False
+        return
+    pixels_per_degree = screen_width / 90
+    relative_angle = (target_yaw - current_yaw + 180) % 360 - 180
+    arrow_x = (screen_width // 2) + int(relative_angle * pixels_per_degree)
+    l_lim, r_lim = screen_width // 3, 2 * screen_width // 3
+    if l_lim <= arrow_x <= r_lim:
+        if not is_ticking: tick_sound_effect.play(loops=-1); is_ticking = True
+    else:
+        if is_ticking: tick_sound_effect.stop(); is_ticking = False
+
+def speak_offline(text):
+    """Mouth: Uses Piper, but does NOT block the main loop."""
+    global is_speaking
+    if not text.strip(): return
+    
+    def _speak_thread():
+        global is_speaking
+        is_speaking = True
+        print(f"🔊 Speaking: {text}")
+        # Use aplay for standard output
+        cmd = f'echo "{text}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1'
+        subprocess.run(cmd, shell=True)
+        is_speaking = False
+        
+    threading.Thread(target=_speak_thread, daemon=True).start()
+
+def execute_action(cmd):
+    global STATE, recorded_path, nav_path, total_dist, current_yaw, last_wp_dist, current_route_filename, landmark_count, current_x, current_z, nav_engine
+    global pending_route_key, pending_route_alias
+    
+    print(f"DEBUG: execute_action received '{cmd}'. Current STATE: {STATE}")
+    
+    if cmd == "start_recording_dest":
+        STATE = "RECORDING"
+        current_route_filename = pending_route_key
+        
+        # 🚀 WRITE TO ALIAS MAP
+        mapping = {}
+        if os.path.exists(NAME_MAP_FILE):
+            try:
+                with open(NAME_MAP_FILE, 'r') as f: mapping = json.load(f)
+            except: pass
+        mapping[pending_route_key] = pending_route_alias
+        with open(NAME_MAP_FILE, 'w') as f: json.dump(mapping, f)
+
+        recorded_path = [[0.0, 0.0, "start", current_yaw, ""]]
+        total_dist, current_yaw, current_x, current_z, last_wp_dist = 0.0, 0.0, 0.0, 0.0, 0.0
+        landmark_count = 0
+        speak_offline(f"Recording. Anchor set.")
+
+    elif "finish" in cmd or "stop" in cmd:
+        if len(recorded_path) > 0:
+            file_path = os.path.join(DOC_PATH, f"{current_route_filename}.json")
+            try:
+                with open(file_path, "w") as f: 
+                    json.dump(recorded_path, f)
+                speak_offline(f"Route saved.")
+            except Exception as e:
+                print(f"Error saving: {e}")
+        
+        if STATE == "NAVIGATING":
+            nav_engine.active = False
+            speak_offline("Navigation stopped.")
+        STATE = "IDLE"
+
+    elif "navigate" in cmd or "go to" in cmd:
+        dest_key, _ = get_ordinal_key(cmd)
+        is_reverse = "reverse" in cmd
+
+        if not dest_key:
+            speak_offline("Please specify an ordinal destination, like first destination.")
+            STATE = "IDLE"
+            return
+
+        file_path = os.path.join(DOC_PATH, f"{dest_key}.json")
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r") as jf:
+                    loaded_data = json.load(jf)
+                
+                if isinstance(loaded_data, list):
+                    nav_path = loaded_data
+                    
+                    if is_reverse:
+                        nav_path.reverse()
+                        speak_offline("Reversing route. Please turn around.")
+                    else:
+                        speak_offline("Navigating.")
+                        
+                    STATE = "NAVIGATING"
+                    total_dist, current_yaw, current_x, current_z = 0.0, 0.0, 0.0, 0.0
+                    nav_engine.load_path(nav_path)
+                    
+                    # Say the first command automatically
+                    first_upd = nav_engine.get_instruction(0, 0, current_yaw, is_on_demand=True)
+                    if first_upd:
+                        # Schedule standard Piper call
+                        threading.Thread(target=speak_offline, args=(first_upd,), daemon=True).start()
+            except Exception as e:
+                print(f"Load error: {e}")
+                speak_offline("Failed to load destination data.")
+        else:
+            STATE = "IDLE"
+            speak_offline("Destination not found.")
+
+def handle_voice_command(cmd):
+    global STATE, pending_command, is_listening, recorded_path, landmark_count, current_x, current_z, current_yaw, previous_state
+    global mic_stream, native_rate, mic_idx, audio_callback, rec, is_recording_note
+    global pending_route_key, pending_route_alias
+
+    import scipy.io.wavfile as wav
+    
+    cmd = cmd.lower().strip()
+    if not cmd: return
+    print(f"✅ Voice Input: {cmd} (State: {STATE})")
+
+    # ---------------- IDLE & BASE LEVEL COMMANDS ---------------- #
+    if STATE == "IDLE":
+        if "identify" in cmd:
+            key, num = get_ordinal_key(cmd)
+            if key:
+                mapping = {}
+                if os.path.exists(NAME_MAP_FILE):
+                    try:
+                        with open(NAME_MAP_FILE, 'r') as f: mapping = json.load(f)
+                    except: pass
+                alias = mapping.get(key, "unnamed")
+                speak_offline(f"Destination {num} is {alias}.")
+            else:
+                speak_offline("Destination not specified.")
+
+        elif any(x in cmd for x in ["record", "go to", "navigate"]):
+            pending_command = cmd
+            STATE = "CONFIRM_START"
+            speak_offline(f"You said {cmd}. Is this correct?")
+            is_listening = True
+
+    # ---------------- START WORKFLOW STATES ---------------- #
+    elif STATE == "CONFIRM_START":
+        if "yes" in cmd or "correct" in cmd:
+            if "record" in pending_command:
+                dest_key, _ = get_ordinal_key(pending_command)
+                if dest_key:
+                    pending_route_key = dest_key
+                    STATE = "WAIT_DEST_NAME"
+                    speak_offline("Please say the name for this destination.")
+                    is_listening = True
+                else:
+                    STATE = "IDLE"
+                    speak_offline("Ordinal required, like record first destination. Cancelled.")
+            else: # Navigating! We don't ask for a name, we just do it.
+                STATE = "IDLE"
+                execute_action(pending_command)
+        else: 
+            STATE = "IDLE"
+            speak_offline("Cancelled.")
+        
+        # Don't reset pending_command yet if traversing down into the dest naming workflow!
+
+    elif STATE == "WAIT_DEST_NAME":
+        pending_route_alias = cmd
+        STATE = "CONFIRM_DEST_NAME"
+        speak_offline(f"You said {cmd}. Is this correct?")
+        is_listening = True
+
+    elif STATE == "CONFIRM_DEST_NAME":
+        if "yes" in cmd or "correct" in cmd:
+            STATE = "IDLE" 
+            pending_command = "" 
+            execute_action("start_recording_dest") # Offloads saving alias & path gen
+        else:
+            STATE = "WAIT_DEST_NAME"
+            speak_offline("Please say the name for this destination again.")
+            is_listening = True
+
+    # ---------------- FINISH WORKFLOW STATES ---------------- #
+    elif STATE == "CONFIRM_FINISH":
+        if "yes" in cmd or "correct" in cmd: execute_action(pending_command)
+        else: STATE = previous_state; speak_offline("Resuming.")
+        pending_command = ""
+
+    # ---------------- THREAD SAFE 5S WAV NOTES ("The Sponge") ---------------- #
+    elif STATE == "CONFIRM_NOTE":
+        import scipy.io.wavfile as wav
+        global voice_note_buffer, note_recording_start_time
+
+        if "yes" in cmd or "correct" in cmd:
+            STATE = "RECORDING_NOTE"
+
+            print("🔊 Prompting: Start")
+            subprocess.run(f'echo "Start" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True) 
+
+            audio_queue.put({"type": "beep"})
+            time.sleep(1.5)  # give it time to beep before record starts
+            
+            note_filename = f"{current_route_filename}_note_{landmark_count}.wav"
+            note_path = os.path.join(DOC_PATH, note_filename)
+            print(f"🎙️ Sponge active for 5s: {note_filename}")
+            
+            voice_note_buffer = [] 
+            note_recording_start_time = time.time()
+            is_recording_note = True # Flag shifts Audio Callback routing!
+            
+            # The Main Thread blocks here as a timeout (Callback loads data seamlessly)
+            while is_recording_note:
+                time.sleep(0.1)
+                
+            audio_queue.put({"type": "beep"})
+            time.sleep(1.0)
+            
+            if len(voice_note_buffer) > 0:
+                try:
+                    audio_data = np.concatenate(voice_note_buffer, axis=0)
+                    wav.write(note_path, native_rate, audio_data)
+                    print(f"✅ Saved to {note_path}")
+                    if len(recorded_path) > 0: recorded_path[-1][4] = note_filename
+                except Exception as e:
+                    print(f"🔴 Note fail: {e}")
+                    
+            print("✅ Recording finished. Saving...")
+            subprocess.run(f'echo "Voice note saved. Continue recording." | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
+            
+            rec.Reset()
+            STATE = "RECORDING"
+        else:
+            STATE = "RECORDING"
+            speak_offline("Continuing recording.")
+
+    # ---------------- OPERATIONAL RECORDING ---------------- #
+    elif STATE == "RECORDING":
+        if "point" in cmd and "saved" in cmd:
+            landmark_count += 1
+            recorded_path.append([current_x, current_z, f"point_{landmark_count}", current_yaw, ""])
+            STATE = "CONFIRM_NOTE"
+            speak_offline(f"Point {landmark_count} saved. Do you want to add a voice note?")
+            is_listening = True
+        elif "finish" in cmd or "stop" in cmd:
+            pending_command = "finish"; previous_state = "RECORDING"; STATE = "CONFIRM_FINISH"
+            speak_offline("Stop recording. Is this correct?"); is_listening = True 
+
+    # ---------------- OPERATIONAL NAVIGATING ---------------- #
+    elif STATE == "NAVIGATING":
+        if "update" in cmd:
+            status = nav_engine.get_instruction(current_x, current_z, current_yaw, is_on_demand=True)
+            if status: speak_offline(status)
+        elif "pause" in cmd:
+            STATE = "PAUSED"; speak_offline("Navigation paused.")
+        elif "finish" in cmd or "stop" in cmd:
+            pending_command = "stop"; previous_state = "NAVIGATING"; STATE = "CONFIRM_FINISH"
+            speak_offline("Stop navigation. Is this correct?"); is_listening = True 
+
+    elif STATE == "PAUSED":
+        if "resume" in cmd: STATE = "NAVIGATING"; speak_offline("Resuming navigation.")
+
+def trigger_listening():
+    global is_listening
+    if not is_speaking and not is_listening:
+        is_listening = True
+        print("👂 Listening...")
+        speak_offline("Listening")
+
+def get_pipeline():
+    p = dai.Pipeline()
+    
+    cam = p.create(dai.node.ColorCamera)
+    cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_12_MP)
+    cam.setIspScale(1, 3) 
+    cam.setInterleaved(False)
+    cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
+    cam.setPreviewSize(640, 640)
+    cam.setPreviewKeepAspectRatio(False) 
+    cam.initialControl.setManualFocus(0) 
+
+    left = p.create(dai.node.MonoCamera)
+    left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
+    left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_480_P)
+    
+    right = p.create(dai.node.MonoCamera)
+    right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
+    right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_480_P)
+    
+    stereo = p.create(dai.node.StereoDepth)
+    stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.DEFAULT)
+    stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A)
+    stereo.setOutputSize(1344, 1008) 
+    
+    # 🚀 THE FIX: Enable Left-Right Check
+    # This forces the camera to return 0 instead of "guessing" 2m-3m when objects are < 0.4m away.
+    stereo.setLeftRightCheck(True)
+    
+    left.out.link(stereo.left)
+    right.out.link(stereo.right)
+    
+    imu = p.create(dai.node.IMU)
+    imu.enableIMUSensor(dai.IMUSensor.GYROSCOPE_RAW, 100)
+    imu.enableIMUSensor(dai.IMUSensor.ACCELEROMETER_RAW, 100)
+    imu.setBatchReportThreshold(1)
+    imu.setMaxBatchReports(20)
+    
+    feat = p.create(dai.node.FeatureTracker)
+    feat.setHardwareResources(2, 2)
+    feat.initialConfig.setNumTargetFeatures(320)
+    left.out.link(feat.inputImage)
+    
+    x_isp = p.create(dai.node.XLinkOut); x_isp.setStreamName("isp"); cam.isp.link(x_isp.input)
+    x_pre = p.create(dai.node.XLinkOut); x_pre.setStreamName("pre"); cam.preview.link(x_pre.input)
+    x_dep = p.create(dai.node.XLinkOut); x_dep.setStreamName("depth"); stereo.depth.link(x_dep.input)
+    x_imu = p.create(dai.node.XLinkOut); x_imu.setStreamName("imu"); imu.out.link(x_imu.input)
+    x_fea = p.create(dai.node.XLinkOut); x_fea.setStreamName("feat"); feat.outputFeatures.link(x_fea.input)
+    
+    return p
+
+def play_sequence(inst):
+    global is_speaking
+    is_speaking = True
+    
+    # 1. Announce Arrival
+    print(f"🔊 Sequence: Reached {inst['label']}")
+    subprocess.run(f'echo "Reached {inst["label"]}." | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
+    
+    # 2. 🚀 PAUSE 1.5 Seconds before playing note
+    time.sleep(1.5)
+    
+    # 3. Play the actual WAV file (The note)
+    note = inst["note_file"]
+    if note and note.endswith(".wav"):
+        note_path = os.path.join(DOC_PATH, note)
+        if os.path.exists(note_path):
+            print(f"🔊 Sequence: Playing {note_path}")
+            subprocess.run(['aplay', '-q', note_path])
+            
+    # 4. Announce the Next Turn
+    if inst.get("next_instruction"):
+        print(f"🔊 Sequence: {inst['next_instruction']}")
+        subprocess.run(f'echo "{inst["next_instruction"]}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
+    
+    is_speaking = False
+
+def run():
+    global total_dist, current_yaw, last_wp_dist, recorded_path, nav_path, is_listening, is_speaking, STATE, current_x, current_z
+    global mic_stream, native_rate, mic_idx, audio_callback, rec, vosk_model
+    
+    # 🚀 1. INITIALIZE CORE VARIABLES
+    curr_yaw, curr_pitch, curr_roll = 0.0, 0.0, 0.0
+    smooth_yaw = 0.0 
+    gx, gy, gz = 0.0, 0.0, 0.0 
+    last_imu_t = None
+    feat_history = {} 
+    motion_window = [] 
+    warmup_frames = 0
+    CALIBRATION_SCALE = 1.66 
+    PERSON_CLASS_ID = 0 
+    
+    print("⏳ Loading Vosk...")
+    vosk_model = vosk.Model(VOSK_MODEL_PATH)
+    rec = vosk.KaldiRecognizer(vosk_model, 16000, json.dumps(ALLOWED_WORDS))
+    
+    print("⏳ Loading Hailo NPU...")
+    target = VDevice(); hef = HEF(HEF_PATH)
+    conf = ConfigureParams.create_from_hef(hef, interface=HailoStreamInterface.PCIe)
+    group = target.configure(hef, conf)[0]
+    in_p = InputVStreamParams.make(group, format_type=FormatType.UINT8)
+    out_p = OutputVStreamParams.make(group, format_type=FormatType.FLOAT32)
+    input_name = hef.get_input_vstream_infos()[0].name
+    
+    try: 
+        btn = Button(26, pull_up=True)
+        btn.when_pressed = trigger_listening
+        print("✅ Button 26 initialized.")
+    except: btn = None
+    
+    devices = sd.query_devices()
+    mic_idx, native_rate = 0, 44100
+    for i, dev in enumerate(devices):
+        if "USB" in dev['name']: mic_idx, native_rate = i, int(dev['default_samplerate']); break
+            
+    def audio_callback(indata, frames, time_info, status):
+        global is_listening, is_speaking, is_recording_note, voice_note_buffer, note_recording_start_time
+        
+        if is_recording_note:
+            audio_int16 = (indata.copy() * 32767).astype(np.int16)
+            voice_note_buffer.append(audio_int16)
+            # Automatic shutoff constraint from Sponge memory mapping 
+            if time.time() - note_recording_start_time >= 5.0:
+                is_recording_note = False
+            return
+            
+        if not is_listening or is_speaking: return
+        
+        try:
+            mono_data = np.mean(indata, axis=1) if indata.shape[1] > 1 else indata.flatten()
+            audio = (mono_data * 32768).astype('int16')
+            num_s = int(len(audio) * 16000 / native_rate)
+            resampled = audio[np.linspace(0, len(audio) - 1, num_s).astype(int)]
+            if rec.AcceptWaveform(resampled.tobytes()):
+                result = json.loads(rec.Result()); cmd = result.get('text', '')
+                if cmd: 
+                    is_listening = False
+                    threading.Thread(target=handle_voice_command, args=(cmd,), daemon=True).start()
+                    rec.Reset()
+        except Exception as e:
+            pass
+
+    with dai.Device(get_pipeline()) as device:
+        try:
+            mic_stream = sd.InputStream(samplerate=native_rate, device=mic_idx, channels=1, dtype='float32', blocksize=4000, callback=audio_callback)
+            mic_stream.start()
+        except: pass
+
+        q_isp = device.getOutputQueue("isp", 4, False); q_pre = device.getOutputQueue("pre", 4, False)
+        q_dep = device.getOutputQueue("depth", 4, False); q_imu = device.getOutputQueue("imu", 20, False)
+        q_fea = device.getOutputQueue("feat", 4, False)
+        
+        with group.activate():
+            with InferVStreams(group, in_p, out_p) as pipe:
+                print("✅ SENSEY Ready."); speak_offline("System Ready.")
+                
+                # 🚀 THERE IS ONLY ONE 'WHILE TRUE' LOOP NOW
+                while True:
+                    # 🚀 2. IMU FUSION & YAW SMOOTHING
+                    imuData = q_imu.tryGetAll() 
+                    
+                    ax, ay, az = 0.0, 0.0, 0.0 
+                    gx, gy, gz = 0.0, 0.0, 0.0
+                    is_stepping = False 
+                    
+                    for data in imuData:
+                        for packet in data.packets:
+                            ts = packet.acceleroMeter.timestamp.get().total_seconds()
+                            if last_imu_t is None: last_imu_t = ts; continue
+                            dt = ts - last_imu_t; last_imu_t = ts
+                            
+                            ax, ay, az = packet.acceleroMeter.x, packet.acceleroMeter.z, packet.acceleroMeter.y
+                            gx, gy, gz = packet.gyroscope.x, packet.gyroscope.z, packet.gyroscope.y
+                            
+                            current_yaw -= (gz * (180.0 / math.pi) * dt)
+                            curr_pitch = 0.98 * (curr_pitch + gx * (180.0/math.pi) * dt) + 0.02 * math.degrees(math.atan2(ay, math.sqrt(ax**2 + az**2)))
+                            curr_roll = 0.98 * (curr_roll + gy * (180.0/math.pi) * dt) + 0.02 * math.degrees(math.atan2(ax, az))
+                            current_yaw = (current_yaw + 180) % 360 - 180
+                            smooth_yaw = (0.8 * smooth_yaw) + (0.2 * current_yaw)
+                            
+                            # STEP DETECTION
+                            accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
+                            if abs(accel_mag - 9.81) > 0.2: 
+                                is_stepping = True
+
+                    # 🚀 3. FETCH SENSOR FRAMES
+                    rgb_isp = q_isp.get().getCvFrame(); rgb_pre = q_pre.get().getCvFrame() 
+                    depth_raw = q_dep.get().getFrame(); fea_data = q_fea.get().trackedFeatures
+                    
+                    # 🚀 4. AI INFERENCE (Masking)
+                    res = pipe.infer({input_name: np.expand_dims(rgb_pre, axis=0)})
+                    raw_dets = list(res.values())[0]
+                    active_boxes = []
+                    if len(raw_dets) > 0:
+                        for class_list in (raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
+                            for det in class_list:
+                                if len(det) >= 5 and det[4] > 0.45:
+                                    ymin, xmin, ymax, xmax = det[:4]
+                                    active_boxes.append([int(xmin*1344), int(ymin*1008), int(xmax*1344), int(ymax*1008)])
+
+                    # 🚀 5. MOTION-FILTERED PEDOMETER 
+                    deltas = []
+                    is_rotating = abs(gz) > 0.1 or abs(gx) > 0.1
+                    
+                    # We track features if we are NOT rotating
+                    if not is_rotating:
+                        for f in fea_data:
+                            x, y = int(f.position.x), int(f.position.y)
+                            dx, dy = int(x * 1344/640), int(y * 1008/480)
+                            
+                            # Draw ALL tracked features (Yellow)
+                            cv2.circle(rgb_isp, (dx, dy), 2, (0, 255, 255), -1)
+                            
+                            if 0 <= dy < 1008 and 0 <= dx < 1344:
+                                is_on_obj = any(b[0]<=dx<=b[2] and b[1]<=dy<=b[3] for b in active_boxes)
+                                if is_on_obj: 
+                                    cv2.circle(rgb_isp, (dx, dy), 2, (0, 0, 255), -1)
+                                    continue 
+
+                                z = depth_raw[dy, dx] / 1000.0
+                                if 0.8 < z < 8.0:
+                                    if f.id in feat_history:
+                                        d_z = feat_history[f.id] - z
+                                        if abs(d_z) < 0.40: 
+                                            deltas.append(d_z)
+                                            # Draw RED dots for movement
+                                            cv2.circle(rgb_isp, (dx, dy), 4, (0, 0, 255), -1)
+                                    feat_history[f.id] = z
+                    
+                    if len(feat_history) > 500: feat_history.clear()
+                    
+                    # 🚀 APPLY PEDOMETER MATH
+                    if deltas:
+                        avg_step = sum(deltas) / len(deltas)
+                        if is_stepping and avg_step > 0.005:
+                            total_dist += (avg_step * CALIBRATION_SCALE)
+                            rad_yaw = math.radians(current_yaw)
+                            current_x = total_dist * math.sin(rad_yaw)
+                            current_z = total_dist * math.cos(rad_yaw)
+
+                    # 🚀 6. NAVIGATION LOGIC
+                    if STATE == "NAVIGATING":
+                        # DYNAMIC SAFETY OVERRIDE
+                        path_blocked = False
+                        critical_warning = ""
+                        
+                        if len(raw_dets) > 0:
+                            for class_list in (raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
+                                for det in class_list:
+                                    if len(det) >= 5 and det[4] > 0.45:
+                                        ymin, xmin, ymax, xmax = det[:4]
+                                        cx = (xmin + xmax) / 2
+                                        sample_y, sample_x = int((ymin+ymax)/2*1008), int(cx*1344)
+                                        sample_y = max(0, min(1007, sample_y))
+                                        sample_x = max(0, min(1343, sample_x))
+                                        obj_z = depth_raw[sample_y, sample_x] / 1000.0
+                                        
+                                        if 0.1 < obj_z < 0.6:
+                                            path_blocked = True
+                                            if cx < 0.33: critical_warning = "Object very close on left."
+                                            elif cx > 0.66: critical_warning = "Object very close on right."
+                                            else: critical_warning = "Object directly in front. Stop."
+                                            break
+                                        elif 0.33 < cx < 0.66 and 0.6 <= obj_z < 1.2:
+                                            path_blocked = True
+                                            critical_warning = "Path blocked ahead."
+                                            break
+                        
+                        if path_blocked:
+                            if is_ticking:
+                                tick_sound_effect.stop()
+                                is_ticking = False
+                            if not is_speaking:
+                                threading.Thread(target=speak_offline, args=(critical_warning,), daemon=True).start()
+                        else:
+                            if not is_speaking:
+                                # Get instruction pushes audio to the queue automatically now
+                                inst = nav_engine.get_instruction(current_x, current_z, current_yaw)
+                                if inst: 
+                                    threading.Thread(target=speak_offline, args=(inst,), daemon=True).start()
+                                    
+                    # 🚀 FIX: Move play_navigation_tick OUTSIDE the if STATE == "NAVIGATING" block!
+                    # This ensures that when STATE changes to IDLE, this function still runs once 
+                    # to realize it shouldn't be ticking and forces tick_sound_effect.stop().
+                    play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
+
+                    processed = inference_result_handler(
+                        rgb_isp, raw_dets, LABELS, CONFIG_DATA, 
+                        vio_data=(total_dist, smooth_yaw, curr_pitch, curr_roll), 
+                        target_yaw=nav_engine.target_yaw if STATE == "NAVIGATING" else None, 
+                        target_dist=nav_engine.distance_to_wp if STATE == "NAVIGATING" else None,
+                        depth_frame=depth_raw, state_text=STATE
+                    )
+                    
+                    # 🚀 RENDER UI
+                    cv2.imshow("SENSEY 6-DOF AR Navigator", cv2.resize(processed, (1024, 768)))
+                    if cv2.waitKey(1) == ord('q'): break
+                    
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    run()
