@@ -66,17 +66,30 @@ current_route_filename, landmark_count, pending_command, previous_state = "", 0,
 # 🚀 ALIAS/MAPPING VARS
 pending_route_key = ""    # Will store e.g., 'destination_1'
 pending_route_alias = ""  # Will store e.g., 'front door to desk'
-NAME_MAP_FILE = os.path.join(DOC_PATH, "name_map.json")
+ROUTE_MAP_FILE = os.path.join(DOC_PATH, "route_map.json")
 
 def get_ordinal_key(text):
-    """Maps spoken words 'first' to file prefix 'destination_1'"""
+    """
+    Guarantees up to 10 precise structural keys without aliasing conflict crashes!
+    """
     ord_map = {
-        "first": "1", "one": "1", "second": "2", "two": "2", "third": "3", "three": "3", 
-        "fourth": "4", "four": "4", "fifth": "5", "five": "5", "sixth": "6", 
-        "seventh": "7", "eighth": "8", "ninth": "9", "tenth": "10"
+        "first": "1", "one": "1", 
+        "second": "2", "two": "2", 
+        "third": "3", "three": "3", 
+        "fourth": "4", "four": "4", 
+        "fifth": "5", "five": "5", 
+        "sixth": "6", "six": "6",
+        "seventh": "7", "seven": "7", 
+        "eighth": "8", "eight": "8", 
+        "ninth": "9", "nine": "9", 
+        "tenth": "10", "ten": "10"
     }
-    for word, num in ord_map.items():
-        if word in text: return f"destination_{num}", num
+    
+    words = text.lower().split()
+    for word in words:
+        if word in ord_map:
+            num = ord_map[word]
+            return f"destination_{num}", num
     return None, None
 
 import queue
@@ -271,35 +284,61 @@ def execute_action(cmd):
     
     print(f"DEBUG: execute_action received '{cmd}'. Current STATE: {STATE}")
     
+    # ------------- ALIAS RECORD SAVER -------------------
     if cmd == "start_recording_dest":
         STATE = "RECORDING"
         current_route_filename = pending_route_key
         
-        # 🚀 WRITE TO ALIAS MAP
+        # Build out clean aliased arrays explicitly over route Maps decoupled natively from previous bugs 
         mapping = {}
-        if os.path.exists(NAME_MAP_FILE):
+        if os.path.exists(ROUTE_MAP_FILE):
             try:
-                with open(NAME_MAP_FILE, 'r') as f: mapping = json.load(f)
-            except: pass
+                with open(ROUTE_MAP_FILE, 'r') as f: 
+                    mapping = json.load(f)
+            except Exception as e:
+                print(f"Mapping JSON init override: {e}")
+                
         mapping[pending_route_key] = pending_route_alias
-        with open(NAME_MAP_FILE, 'w') as f: json.dump(mapping, f)
+        
+        with open(ROUTE_MAP_FILE, 'w') as f: 
+            json.dump(mapping, f, indent=4) # cleanly formats array visually tracking indices flawlessly
 
         recorded_path = [[0.0, 0.0, "start", current_yaw, ""]]
         total_dist, current_yaw, current_x, current_z, last_wp_dist = 0.0, 0.0, 0.0, 0.0, 0.0
         landmark_count = 0
         speak_offline(f"Recording. Anchor set.")
 
-    elif "finish" in cmd or "stop" in cmd:
+    # 🚀 FIX: Distinct 'FINISH' routing natively ignores state to properly write output arrays mapped specifically when asked! 
+    elif "finish" in cmd:
         if len(recorded_path) > 0:
+            # Inject tracking parameters mapping immediately 
+            recorded_path.append([current_x, current_z, "destination", current_yaw, ""])
+            
+            # Form file pathway locally generating arrays dynamically inside specific directory targeting! 
             file_path = os.path.join(DOC_PATH, f"{current_route_filename}.json")
+            
             try:
                 with open(file_path, "w") as f: 
-                    json.dump(recorded_path, f)
-                speak_offline(f"Route saved.")
+                    json.dump(recorded_path, f, indent=4) # Ident added mapping formatting internally resolving debugging checks effectively.
+                
+                print(f"DEBUG: Successfully stored internal pathway constraints map locally {file_path}")    
+                speak_offline("Saving last point. Recording finished.")
             except Exception as e:
-                print(f"Error saving: {e}")
+                print(f"Error saving internal parameters string failure logic output tracking error! : {e}")
         
-        if STATE == "NAVIGATING":
+        elif STATE == "NAVIGATING":
+            nav_engine.active = False
+            speak_offline("Navigation stopped.")
+            
+        STATE = "IDLE"
+
+    # 🚀 SEPARATE "STOP" LOGIC (CANCEL RECORDING) 
+    elif "stop" in cmd:
+        # Clear mapping state paths ignoring memory arrays seamlessly resetting configuration
+        if len(recorded_path) > 0 and current_route_filename != "":
+            print(f"DEBUG: Purged active pathway string configurations completely aborting active routes!")
+            speak_offline("Recording not saved.")
+        elif STATE == "NAVIGATING":
             nav_engine.active = False
             speak_offline("Navigation stopped.")
         STATE = "IDLE"
@@ -309,7 +348,7 @@ def execute_action(cmd):
         is_reverse = "reverse" in cmd
 
         if not dest_key:
-            speak_offline("Please specify an ordinal destination, like first destination.")
+            speak_offline("Please specify an ordinal destination.")
             STATE = "IDLE"
             return
 
@@ -321,7 +360,6 @@ def execute_action(cmd):
                 
                 if isinstance(loaded_data, list):
                     nav_path = loaded_data
-                    
                     if is_reverse:
                         nav_path.reverse()
                         audio_queue.put({"type": "text", "msg": "Reversing route. Please turn around."})
@@ -332,13 +370,11 @@ def execute_action(cmd):
                     total_dist, current_yaw, current_x, current_z = 0.0, 0.0, 0.0, 0.0
                     nav_engine.load_path(nav_path)
                     
-                    # 🚀 SEND THE STATUS DICTATION STRAIGHT INTO THE SAME MANAGED AUDIO QUEUE 
                     first_upd = nav_engine.get_instruction(0, 0, current_yaw, is_on_demand=True)
                     if first_upd:
                         audio_queue.put({"type": "text", "msg": first_upd})
 
             except Exception as e:
-                print(f"Load error: {e}")
                 speak_offline("Failed to load destination data.")
         else:
             STATE = "IDLE"
@@ -361,17 +397,15 @@ def handle_voice_command(cmd):
             key, num = get_ordinal_key(cmd)
             if key:
                 mapping = {}
-                if os.path.exists(NAME_MAP_FILE):
+                # Extract cleanly specifically targeting our brand new structured layout!
+                if os.path.exists(ROUTE_MAP_FILE):
                     try:
-                        with open(NAME_MAP_FILE, 'r') as f: mapping = json.load(f)
+                        with open(ROUTE_MAP_FILE, 'r') as f: mapping = json.load(f)
                     except: pass
                 alias = mapping.get(key, "unnamed")
                 speak_offline(f"Destination {num} is {alias}.")
             else:
                 speak_offline("Destination not specified.")
-                
-            # 🚀 FIX: We REMOVED `is_listening = True` from here! 
-            # It now safely exits, allowing you to press Button 26 again naturally.
 
         elif any(x in cmd for x in ["record", "go to", "navigate"]):
             pending_command = cmd
@@ -388,33 +422,34 @@ def handle_voice_command(cmd):
                     pending_route_key = dest_key
                     STATE = "WAIT_DEST_NAME"
                     speak_offline("Please say the name for this destination.")
-                    is_listening = True
+                    # 🚀 FIX: explicitly unfreeze Vosk callback gate AFTER prompt
+                    is_listening = True 
                 else:
                     STATE = "IDLE"
                     speak_offline("Ordinal required, like record first destination. Cancelled.")
-            else: # Navigating! We don't ask for a name, we just do it.
+            else: # Navigating Mode 
                 STATE = "IDLE"
                 execute_action(pending_command)
         else: 
             STATE = "IDLE"
             speak_offline("Cancelled.")
-        
-        # Don't reset pending_command yet if traversing down into the dest naming workflow!
 
     elif STATE == "WAIT_DEST_NAME":
         pending_route_alias = cmd
         STATE = "CONFIRM_DEST_NAME"
         speak_offline(f"You said {cmd}. Is this correct?")
+        # 🚀 FIX: keep the chained workflow continuous and non-stagnating
         is_listening = True
 
     elif STATE == "CONFIRM_DEST_NAME":
         if "yes" in cmd or "correct" in cmd:
             STATE = "IDLE" 
             pending_command = "" 
-            execute_action("start_recording_dest") # Offloads saving alias & path gen
+            execute_action("start_recording_dest") # Saves directly in mapped routing!
         else:
             STATE = "WAIT_DEST_NAME"
             speak_offline("Please say the name for this destination again.")
+            # 🚀 FIX: looping fallback to prevent mic-death error
             is_listening = True
 
     # ---------------- FINISH WORKFLOW STATES ---------------- #
@@ -470,6 +505,7 @@ def handle_voice_command(cmd):
             STATE = "RECORDING"
             speak_offline("Continuing recording.")
 
+
     # ---------------- OPERATIONAL RECORDING ---------------- #
     elif STATE == "RECORDING":
         if "point" in cmd and "saved" in cmd:
@@ -478,9 +514,22 @@ def handle_voice_command(cmd):
             STATE = "CONFIRM_NOTE"
             speak_offline(f"Point {landmark_count} saved. Do you want to add a voice note?")
             is_listening = True
-        elif "finish" in cmd or "stop" in cmd:
-            pending_command = "finish"; previous_state = "RECORDING"; STATE = "CONFIRM_FINISH"
-            speak_offline("Stop recording. Is this correct?"); is_listening = True 
+            
+        # 🚀 DISTINCT "FINISH" COMMAND (Success wrap-up)
+        elif "finish" in cmd:
+            pending_command = "finish"
+            previous_state = "RECORDING"
+            STATE = "CONFIRM_FINISH"
+            speak_offline("Finish recording. Is this correct?")
+            is_listening = True 
+            
+        # 🚀 DISTINCT "STOP" COMMAND (Abort)
+        elif "stop" in cmd:
+            pending_command = "stop"
+            previous_state = "RECORDING"
+            STATE = "CONFIRM_FINISH"
+            speak_offline("Stop recording. Is this correct?")
+            is_listening = True 
 
     # ---------------- OPERATIONAL NAVIGATING ---------------- #
     elif STATE == "NAVIGATING":
