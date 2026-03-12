@@ -161,18 +161,27 @@ class NavigationManager:
         self.active = True
         self.current_wp_index = 1 if len(self.path) > 1 else 0
         self.offset_x, self.offset_z, self.offset_yaw = 0, 0, 0
+############################################################################################
+    def calculate_turn(self, cx, cz, cur_yaw, tx, tz):
+        # 1. Calculate the Target Heading (Global 0-360)
+        target_yaw = math.degrees(math.atan2(tx - cx, tz - cz)) % 360
+        
+        # 2. Calculate the Relative Turn (The "Clew" Logic)
+        # This gives us a result between -180 and 180
+        turn_error = (target_yaw - cur_yaw + 180) % 360 - 180
+        
+        # 3. Simplify the instruction
+        if abs(turn_error) < 20:
+            return "Continue straight"
+        elif turn_error > 0:
+            return f"Turn right {int(turn_error)} degrees"
+        else:
+            return f"Turn left {int(abs(turn_error))} degrees"
+        
+        if abs(turn_error) > 150:
+            return "Turn around"
 
-    def get_human_direction(self, target_yaw, current_yaw):
-        error = (target_yaw - current_yaw + 180) % 360 - 180
-        if -22.5 <= error <= 22.5: return "straight ahead"
-        elif 22.5 < error <= 67.5: return "front right"
-        elif 67.5 < error <= 112.5: return "to your right side"
-        elif 112.5 < error <= 157.5: return "back right"
-        elif -67.5 <= error < -22.5: return "front left"
-        elif -112.5 <= error < -67.5: return "to your left side"
-        elif -157.5 <= error < -112.5: return "back left"
-        else: return "directly behind you"
-
+############################################################################################
     def get_instruction(self, cur_x, cur_z, cur_yaw, is_on_demand=False):
         global STATE
         if not self.active or self.current_wp_index >= len(self.path): return None
@@ -673,39 +682,60 @@ def play_sequence(inst):
 #---------------------------------------------------------------------------------------------------------------------
 # 🚀 8-Tag Cardinal Map (Tag ID : World Yaw)
 TAG_MAP = {
-    0: 0.0,    # North
-    1: 45.0,   # NE
-    2: 90.0,   # East
-    3: 135.0,  # SE
+    0: 0.0,    # North 
+    1: 45.0,   # North-East
+    2: 90.0,   # East 
+    3: 135.0,  # South-East
     4: 180.0,  # South
-    5: 225.0,  # SW
-    6: 270.0,  # West
-    7: 315.0   # NW
+    5: 225.0,  # South-West
+    6: 270.0,  # West 
+    7: 315.0   # North-West
 }
 
-def handle_april_tags(april_data, current_yaw, width):
+def handle_april_tags(april_data, current_yaw, current_x, current_z, depth_frame):
     """
-    🚀 UNIFIED BOUNDARY LOGIC: 
-    Only snaps if the tag is inside the center 1/3 of the screen.
+    🚀 UNIFIED APRILTAG SNAP: Combines Center-Offset checking with Depth validation.
     """
-    l_lim = width // 3
-    r_lim = (width // 3) * 2
+    # The Mono camera is 640x480. 
+    # Center 1/3 is normally 213 to 426. 
+    # We shift it right by ~50 pixels to compensate for the Left lens physical offset.
+    l_lim = (640 * 0.33) + 50
+    r_lim = (640 * 0.66) + 50
     
-    # Iterate through detected tags
     for det in april_data.aprilTags:
-        # Calculate center of the tag in pixels
-        tag_center_x = (det.topLeft.x + det.topRight.x + det.bottomRight.x + det.bottomLeft.x) / 4
-        
-        # Only snap if tag is in the CENTER ZONE
-        if l_lim < tag_center_x < r_lim:
-            if det.id in TAG_MAP:
-                target_world_yaw = TAG_MAP[det.id]
+        if det.id in TAG_MAP:
+            # 1. Calculate center of tag in Mono pixels (640x480)
+            cx_mono = (det.topLeft.x + det.topRight.x + det.bottomRight.x + det.bottomLeft.x) / 4
+            cy_mono = (det.topLeft.y + det.topRight.y + det.bottomRight.y + det.bottomLeft.y) / 4
+            
+            # 2. CENTER GATE: Only proceed if the tag is in the middle of the screen
+            if l_lim < cx_mono < r_lim:
                 
-                # SNAP: Instantly align to the tag's true heading
-                current_yaw = target_world_yaw
-                print(f"⚓ ANCHOR SNAPPED! Tag {det.id} in center. Yaw corrected to {int(current_yaw)}°")
+                # 3. Scale coordinates to match the 1344x1008 Depth Map
+                dx = int(cx_mono * (1344 / 640))
+                dy = int(cy_mono * (1008 / 480))
                 
-    return current_yaw
+                # 4. DEPTH GATE: Ensure pixels are inside the frame
+                if 0 <= dy < 1008 and 0 <= dx < 1344:
+                    z_meters = depth_frame[dy, dx] / 1000.0
+                    
+                    # Only snap if the tag is between 0.5m and 3.0m away 
+                    # (Prevents snapping to tiny printed tags far away)
+                    if 0.45 < z_meters < 3.0:
+                        
+                        # 5. 🚀 THE HARD SNAP
+                        target_world_yaw = TAG_MAP[det.id]
+                        
+                        # Only print/snap if there is an actual drift to correct (> 2 degrees)
+                        # This prevents the terminal from spamming when you are already aligned
+                        if abs((target_world_yaw - current_yaw + 180) % 360 - 180) > 2.0:
+                            current_yaw = target_world_yaw
+                            print(f"⚓ ANCHOR SNAPPED! Tag {det.id} at {z_meters:.1f}m. Yaw locked to {current_yaw}°")
+                            
+                        # Note: We do not reset current_x or current_z here unless we map the exact 
+                        # X,Z coordinates of every tag in the room. Snapping Yaw is enough to fix drift!
+                        
+    return current_yaw, current_x, current_z
 
 #--------------------------------------------------------------------------------------------------------------------
 
@@ -823,16 +853,20 @@ def run():
                             if abs(accel_mag - 9.81) > 0.2: 
                                 is_stepping = True
 
-                    # 🚀 3. FETCH SENSOR FRAMES
-                    rgb_isp = q_isp.get().getCvFrame(); rgb_pre = q_pre.get().getCvFrame() 
-                    depth_raw = q_dep.get().getFrame(); fea_data = q_fea.get().trackedFeatures
                     
-                    # 🚀 APRILTAG SNAP (Add this immediately after fetching frames)
+                    # 🚀 3. FETCH SENSOR FRAMES
+                    rgb_isp = q_isp.get().getCvFrame()
+                    rgb_pre = q_pre.get().getCvFrame() 
+                    depth_raw = q_dep.get().getFrame()
+                    fea_data = q_fea.get().trackedFeatures
+                    
+                    # 🚀 NEW: FETCH APRILTAGS & APPLY SNAP
                     april_in = q_apr.tryGet()
                     if april_in:
-                        # 1024 is your screen width
-                        current_yaw = handle_april_tags(april_in, current_yaw, width=1024)
-                    
+                        current_yaw, current_x, current_z = handle_april_tags(
+                            april_in, current_yaw, current_x, current_z, depth_raw
+                        )
+                        
                     # 🚀 4. AI INFERENCE (Masking)
                     res = pipe.infer({input_name: np.expand_dims(rgb_pre, axis=0)})
                     raw_dets = list(res.values())[0]
