@@ -7,6 +7,7 @@ import vosk
 import pygame
 from hailo_platform import HEF, VDevice, HailoStreamInterface, InferVStreams, ConfigureParams, InputVStreamParams, OutputVStreamParams, FormatType
 from gpiozero import Button
+from collections import deque
 
 
 is_listening, is_speaking = False, False
@@ -50,7 +51,7 @@ is_ticking = False
 # 🚀 NEW: Load your custom sound effects via Pygame to prevent 'Static'
 try:
     start_beep_sound = pygame.mixer.Sound("/home/raspberrypi/TTS-STT-AUDIO/recording_notes.wav")
-    arrival_sound = pygame.mixer.Sound("/home/raspberrypi/TTS-STT-AUDIO/arrived_destination.wav")
+    arrival_sound = pygame.mixer.Sound("/home/raspberrypi/TTS-STT-AUDIO/arrived_destination02.wav")
 except Exception as e:
     print(f"⚠️ Warning: Could not load custom sounds. {e}")
     # Fallback to standard beep if your files are missing
@@ -718,6 +719,7 @@ def run():
     gx, gy, gz = 0.0, 0.0, 0.0 
     last_imu_t = None
     feat_history = {} 
+    pixel_path_history = {} # 🚀 NEW: Stores the (x,y) trails for the purple lines
     motion_window = [] 
     warmup_frames = 0
     CALIBRATION_SCALE = 1.66 
@@ -846,37 +848,68 @@ def run():
                     deltas = []
                     is_rotating = abs(gz) > 0.1 or abs(gx) > 0.1
                     
-                    # We track features if we are NOT rotating
+                    # Track which IDs are currently visible to clean up old ones
+                    current_feat_ids = set()
+
                     if not is_rotating:
                         for f in fea_data:
+                            current_feat_ids.add(f.id)
+                            
                             x, y = int(f.position.x), int(f.position.y)
                             dx, dy = int(x * 1344/640), int(y * 1008/480)
                             
-                            # Draw ALL tracked features (Yellow)
-                            cv2.circle(rgb_isp, (dx, dy), 2, (0, 255, 255), -1)
-                            
                             if 0 <= dy < 1008 and 0 <= dx < 1344:
-                                is_on_obj = any(b[0]<=dx<=b[2] and b[1]<=dy<=b[3] for b in active_boxes)
-                                if is_on_obj: 
-                                    cv2.circle(rgb_isp, (dx, dy), 2, (0, 0, 255), -1)
-                                    continue 
+                                # --- DYNAMIC MASKING ---
+                                is_on_person = False
+                                if len(raw_dets) > 0:
+                                    for class_id, class_list in enumerate(raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
+                                        if class_id == PERSON_CLASS_ID:
+                                            for det in class_list:
+                                                if len(det) >= 5 and det[4] > 0.5:
+                                                    ymin, xmin, ymax, xmax = det[:4]
+                                                    if (xmin*1344) <= dx <= (xmax*1344) and (ymin*1008) <= dy <= (ymax*1008):
+                                                        is_on_person = True; break
+                                        if is_on_person: break
+                                
+                                if is_on_person: continue # Skip points on moving students
 
+                                # 🚀 LUXONIS VISUALIZER: The Deque Trail Logic
+                                if f.id not in pixel_path_history:
+                                    # Create a queue that automatically deletes points older than 10 frames
+                                    pixel_path_history[f.id] = deque(maxlen=10)
+                                
+                                # Add current position to the history
+                                pixel_path_history[f.id].append((dx, dy))
+                                
+                                # Draw the purple trail
+                                path = list(pixel_path_history[f.id])
+                                for i in range(len(path) - 1):
+                                    cv2.line(rgb_isp, path[i], path[i+1], (200, 0, 200), 1, cv2.LINE_AA)
+                                
+                                # Draw the solid red dot at the head of the trail
+                                cv2.circle(rgb_isp, (dx, dy), 2, (0, 0, 255), -1, cv2.LINE_AA)
+
+                                # --- PEDOMETER MATH (Completely separate from drawing) ---
                                 z = depth_raw[dy, dx] / 1000.0
                                 if 0.8 < z < 8.0:
                                     if f.id in feat_history:
                                         d_z = feat_history[f.id] - z
-                                        if abs(d_z) < 0.40: 
-                                            deltas.append(d_z)
-                                            # Draw RED dots for movement
-                                            cv2.circle(rgb_isp, (dx, dy), 4, (0, 0, 255), -1)
+                                        if abs(d_z) < 0.40: deltas.append(d_z)
                                     feat_history[f.id] = z
                     
-                    if len(feat_history) > 500: feat_history.clear()
+                    # 🧹 CLEANUP: Delete trails and history for points that left the screen
+                    old_ids = set(pixel_path_history.keys()) - current_feat_ids
+                    for old_id in old_ids:
+                        del pixel_path_history[old_id]
+                        if old_id in feat_history:
+                            del feat_history[old_id]
                     
-                    # 🚀 APPLY PEDOMETER MATH
-                    if deltas:
-                        avg_step = sum(deltas) / len(deltas)
-                        if is_stepping and avg_step > 0.005:
+                    # 🚀 APPLY PEDOMETER MATH (Step Gate)
+                    # We check: Is the teacher physically moving? (is_stepping is defined in IMU loop)
+                    if deltas and is_stepping:
+                        avg_step = np.median(deltas)
+                        # Forward-Only Gate
+                        if avg_step > 0.005:
                             total_dist += (avg_step * CALIBRATION_SCALE)
                             rad_yaw = math.radians(current_yaw)
                             current_x = total_dist * math.sin(rad_yaw)
