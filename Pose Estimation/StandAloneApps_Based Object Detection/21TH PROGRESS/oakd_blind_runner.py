@@ -263,19 +263,33 @@ class NavigationManager:
 
 nav_engine = NavigationManager()
 
+#################################################################################
+
 def play_navigation_tick(current_yaw, target_yaw, screen_width=1024):
     global is_ticking
     if target_yaw is None or STATE != "NAVIGATING":
-        if is_ticking: tick_sound_effect.stop(); is_ticking = False
+        if is_ticking: 
+            tick_sound_effect.stop()
+            is_ticking = False
         return
+        
     pixels_per_degree = screen_width / 90
     relative_angle = (target_yaw - current_yaw + 180) % 360 - 180
     arrow_x = (screen_width // 2) + int(relative_angle * pixels_per_degree)
+    
+    # 🚀 BOUNDARY: Center 1/3 only
     l_lim, r_lim = screen_width // 3, 2 * screen_width // 3
+    
     if l_lim <= arrow_x <= r_lim:
-        if not is_ticking: tick_sound_effect.play(loops=-1); is_ticking = True
+        if not is_ticking: 
+            tick_sound_effect.play(loops=-1)
+            is_ticking = True
     else:
-        if is_ticking: tick_sound_effect.stop(); is_ticking = False
+        if is_ticking: 
+            tick_sound_effect.stop()
+            is_ticking = False
+            
+#################################################################################        
 
 def speak_offline(text):
     """Mouth: Uses Piper. Prints to terminal and speaks."""
@@ -706,17 +720,18 @@ TAG_NAMES = {
 
 def handle_april_tags(april_data, current_yaw, current_x, current_z, depth_frame, display_frame):
     """
-    🚀 UNIFIED APRILTAG SNAP: Now with Visual Bounding Boxes and Cardinal Names!
+    🚀 UNIFIED APRILTAG SNAP: Visual Boxes + Cardinal Names + Yaw Correction.
     """
     l_lim = (640 * 0.33) + 50
     r_lim = (640 * 0.66) + 50
     
-    # Scaling factors from Mono (640x480) to RGB (1344x1008)
+    # Scaling from 640x480 (Mono) to 1344x1008 (Depth/RGB)
     scale_x = 1344 / 640
     scale_y = 1008 / 480
     
     for det in april_data.aprilTags:
         if det.id in TAG_MAP:
+            # Calculate pixel center of the tag
             cx_mono = (det.topLeft.x + det.topRight.x + det.bottomRight.x + det.bottomLeft.x) / 4
             cy_mono = (det.topLeft.y + det.topRight.y + det.bottomRight.y + det.bottomLeft.y) / 4
             
@@ -726,30 +741,25 @@ def handle_april_tags(april_data, current_yaw, current_x, current_z, depth_frame
             if 0 <= dy < 1008 and 0 <= dx < 1344:
                 z_meters = depth_frame[dy, dx] / 1000.0
                 
-                # 🟢 VISUALIZER: Draw the AprilTag on the screen!
+                # 🟢 VISUALIZER: Draw Purple Box and ID
                 pt1 = (int(det.topLeft.x * scale_x), int(det.topLeft.y * scale_y))
                 pt2 = (int(det.topRight.x * scale_x), int(det.topRight.y * scale_y))
                 pt3 = (int(det.bottomRight.x * scale_x), int(det.bottomRight.y * scale_y))
                 pt4 = (int(det.bottomLeft.x * scale_x), int(det.bottomLeft.y * scale_y))
+                cv2.polylines(display_frame, [np.array([pt1, pt2, pt3, pt4], np.int32)], True, (255, 0, 255), 2)
                 
-                # Draw a bright Purple box around the tag
-                pts = np.array([pt1, pt2, pt3, pt4], np.int32)
-                cv2.polylines(display_frame, [pts], isClosed=True, color=(255, 0, 255), thickness=2)
-                
-                # 🚀 NEW: Get the Cardinal Name and add it to the label
                 tag_name = TAG_NAMES.get(det.id, "Unknown")
                 label = f"TAG {det.id} ({tag_name}) | {z_meters:.1f}m"
-                
-                # Draw the text above the tag
                 cv2.putText(display_frame, label, (pt1[0], pt1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
 
                 # --- THE SNAP LOGIC ---
+                # Only snap if the tag is centered and close enough (0.5m - 2.5m)
                 if l_lim < cx_mono < r_lim:
-                    if 0.5 < z_meters < 3.0:
+                    if 0.5 < z_meters < 2.5:
                         target_world_yaw = TAG_MAP[det.id]
                         if abs((target_world_yaw - current_yaw + 180) % 360 - 180) > 2.0:
                             current_yaw = target_world_yaw
-                            print(f"⚓ ANCHOR SNAPPED! {tag_name} (Tag {det.id}) at {z_meters:.1f}m. Yaw locked to {current_yaw}°")
+                            print(f"⚓ ANCHOR SNAPPED! {tag_name} (Tag {det.id}) locked Yaw to {int(current_yaw)}°")
                             
     return current_yaw, current_x, current_z
 
@@ -964,6 +974,23 @@ def run():
                             rad_yaw = math.radians(current_yaw)
                             current_x = total_dist * math.sin(rad_yaw)
                             current_z = total_dist * math.cos(rad_yaw)
+                            
+                    # 🚀 5. CLEW RECORDING LOGIC (Distance & Yaw Simplification)
+                    if STATE == "RECORDING":
+                        # Ensure we have at least one start point
+                        if len(recorded_path) > 0:
+                            last_p = recorded_path[-1]
+                            dist_from_last = math.sqrt((current_x - last_p[0])**2 + (current_z - last_p[1])**2)
+                            
+                            # Calculate Yaw change correctly (-180 to 180)
+                            yaw_change = abs((current_yaw - last_p[3] + 180) % 360 - 180)
+                            
+                            # 🚀 BREADCRUMB RULE: Only save if significant movement
+                            if dist_from_last > 0.6 or yaw_change > 20:
+                                # Save: [X, Z, Label, Yaw, Note]
+                                recorded_path.append([current_x, current_z, "path", current_yaw, ""])
+                                print(f"📍 Breadcrumb saved. Total: {len(recorded_path)}")
+                                
 
                     # 🚀 6. NAVIGATION LOGIC (Only runs when NAVIGATING)
                     if STATE == "NAVIGATING":
