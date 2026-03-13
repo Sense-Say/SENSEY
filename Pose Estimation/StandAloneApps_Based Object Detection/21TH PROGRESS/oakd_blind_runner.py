@@ -133,15 +133,16 @@ class NavigationManager:
         self.target_yaw = 0.0
         self.distance_to_wp = 0.0
         self.offset_x, self.offset_z, self.offset_yaw = 0.0, 0.0, 0.0
-        self.stride_length = 0.75 
-        self.last_arrival_time = 0.0
-        
+        self.stride_length = 0.33
+
     def load_path(self, path_data):
-        """🚀 CLEW AUTO-TURN LOGIC: Analyzes breadcrumbs to find corners."""
+        """🚀 CLEW AUTO-TURN LOGIC"""
         raw_nodes = []
         for p in path_data:
+            label = str(p[2]).lower()
+            node_type = "ANCHOR" if ("point" in label or "destination" in label or "start" in label) else "PATH"
             raw_nodes.append({
-                "x": p[0], "z": p[1], "label": p[2], 
+                "x": p[0], "z": p[1], "type": node_type, "label": p[2], 
                 "yaw": p[3] if len(p) > 3 else 0.0,
                 "note": p[4] if len(p) > 4 else ""
             })
@@ -161,84 +162,86 @@ class NavigationManager:
         self.active = True
         self.current_wp_index = 1 if len(self.path) > 1 else 0
         self.offset_x, self.offset_z, self.offset_yaw = 0, 0, 0
-############################################################################################
-    def calculate_turn(self, cx, cz, cur_yaw, tx, tz):
-        # 1. Calculate the Target Heading (Global 0-360)
-        target_yaw = math.degrees(math.atan2(tx - cx, tz - cz)) % 360
-        
-        # 2. Calculate the Relative Turn (The "Clew" Logic)
-        # This gives us a result between -180 and 180
-        turn_error = (target_yaw - cur_yaw + 180) % 360 - 180
-        
-        # 3. Simplify the instruction
-        if abs(turn_error) < 20:
-            return "Continue straight"
-        elif turn_error > 0:
-            return f"Turn right {int(turn_error)} degrees"
-        else:
-            return f"Turn left {int(abs(turn_error))} degrees"
-        
-        if abs(turn_error) > 150:
-            return "Turn around"
 
-############################################################################################
+    def get_human_direction(self, target_yaw, current_yaw):
+        """🚀 8-ZONE DIRECTION LOGIC"""
+        error = (target_yaw - current_yaw + 180) % 360 - 180
+        if -22.5 <= error <= 22.5: return "straight ahead"
+        elif 22.5 < error <= 67.5: return "front right"
+        elif 67.5 < error <= 112.5: return "to your right side"
+        elif 112.5 < error <= 157.5: return "back right"
+        elif -67.5 <= error < -22.5: return "front left"
+        elif -112.5 <= error < -67.5: return "to your left side"
+        elif -157.5 <= error < -112.5: return "back left"
+        else: return "directly behind you"
+
     def get_instruction(self, cur_x, cur_z, cur_yaw, is_on_demand=False):
-        global STATE
+        global STATE, is_speaking
         if not self.active or self.current_wp_index >= len(self.path): return None
-        
+
         target = self.path[self.current_wp_index]
         tx, tz = target["x"] + self.offset_x, target["z"] + self.offset_z
         self.distance_to_wp = math.sqrt((tx - cur_x)**2 + (tz - cur_z)**2)
-        self.target_yaw = math.degrees(math.atan2(tx - cur_x, tz - cur_z)) % 360
         
-        direction_word = self.get_human_direction(self.target_yaw, cur_yaw)
-        steps = max(1, int(self.distance_to_wp / self.stride_length))
+        # 🚀 PINNED YAW: If it's an Anchor, lock the HUD arrow to the recorded Yaw!
+        if target["type"] == "ANCHOR":
+            self.target_yaw = (target["yaw"] + self.offset_yaw) % 360
+        else:
+            self.target_yaw = (math.degrees(math.atan2(tx - cur_x, tz - cur_z)) + self.offset_yaw) % 360
+
+        # 🚀 OVERSHOOT PROTECTION: If target is behind us and we are close, skip it!
+        turn_error = (self.target_yaw - cur_yaw + 180) % 360 - 180
+        if abs(turn_error) > 90 and self.distance_to_wp < 1.5:
+            self.current_wp_index += 1
+            if self.current_wp_index >= len(self.path):
+                self.active = False
+                STATE = "IDLE"
+                audio_queue.put({"type": "text", "msg": "Arrived at destination."})
+            return None
+
+        if is_speaking and not is_on_demand: return None
 
         if is_on_demand:
+            steps = max(1, int(self.distance_to_wp / self.stride_length))
+            direction_word = self.get_human_direction(self.target_yaw, cur_yaw)
             return f"Target is {direction_word}. Walk {steps} steps."
 
-        # Arrival Logic (Distance < 0.45m)
-# ... inside get_instruction ...
+        # 🚀 ARRIVAL LOGIC
         if self.distance_to_wp < 0.45:
-            
-            
-            # 2. Play voice note if it exists
-            if target['note'] and target['note'].endswith(".wav"):
-                note_full_path = os.path.join(DOC_PATH, target['note'])
-                if os.path.exists(note_full_path):
-                    print({note_full_path})
-                    audio_queue.put({"type": "wav", "path": note_full_path})
+            node_type = target['type']
+            note = target['note']
+            label = target['label']
             
             self.current_wp_index += 1
             
-            # 🚀 3. THE FIXED FINAL DESTINATION LOGIC
             if self.current_wp_index >= len(self.path):
                 self.active = False
-                STATE = "IDLE" # Forcefully end navigation visually
-                
-                # Push the Pygame sound to the queue
-                print({"arrival"})
-                audio_queue.put({"type": "arrival"})
-                
-                # Push the final speech (It will wait for the sound to finish automatically)
-                print({"Navigation ended."})
-                audio_queue.put({"type": "text", "msg": "Arrived at destination. Navigation ended."})
-                
-                return None             
-            # If NOT final destination, queue the next turn instruction
-            next_target = self.path[self.current_wp_index]
-            nx, nz = next_target["x"] + self.offset_x, next_target["z"] + self.offset_z
-            next_yaw = math.degrees(math.atan2(nx - tx, nz - tz)) % 360
-            next_direction = self.get_human_direction(next_yaw, cur_yaw)
+                STATE = "IDLE"
+                audio_queue.put({"type": "wav", "path": "/home/raspberrypi/TTS-STT-AUDIO/arrived_destination.wav"})
+                audio_queue.put({"type": "text", "msg": "Arrived at destination, going Idle."})
+                return None
             
-            if "ahead" in next_direction:
-                print({"Continue straight."})
-                audio_queue.put({"type": "text", "msg": "Continue straight."})
-            else:
-                print({f"Turn {next_direction}."})
-                audio_queue.put({"type": "text", "msg": f"Turn {next_direction}."})
+            # Only speak if it's a Landmark or has a Note
+            if node_type == "ANCHOR" or note:
+                audio_queue.put({"type": "text", "msg": f"Reached {label}."})
                 
-            return None
+                if note and note.endswith(".wav"):
+                    audio_queue.put({"type": "wav", "path": os.path.join(DOC_PATH, note)})
+                
+                # Look ahead to next point
+                next_wp = self.path[self.current_wp_index]
+                nx, nz = next_wp["x"] + self.offset_x, next_wp["z"] + self.offset_z
+                next_dist = math.sqrt((nx - tx)**2 + (nz - tz)**2)
+                next_steps = max(1, int(next_dist / self.stride_length))
+                
+                # Calculate turn to next point
+                next_yaw = (next_wp["yaw"] + self.offset_yaw) % 360 if next_wp["type"] == "ANCHOR" else math.degrees(math.atan2(nx - tx, nz - tz)) % 360
+                next_direction = self.get_human_direction(next_yaw, cur_yaw)
+                
+                if "ahead" in next_direction:
+                    audio_queue.put({"type": "text", "msg": f"Continue straight for {next_steps} steps."})
+                else:
+                    audio_queue.put({"type": "text", "msg": f"Turn {next_direction} to {int(next_yaw)} degrees, and walk {next_steps} steps."})
                 
         return None
 
@@ -251,19 +254,7 @@ class NavigationManager:
             d += math.sqrt((p2["x"] - p1["x"])**2 + (p2["z"] - p1["z"])**2)
         return d
 
-    def get_path_remaining_distance(self, cur_x, cur_z):
-        # This is used for the HUD display if you want total remaining distance
-        if not self.active or self.current_wp_index >= len(self.path): return 0.0
-        target = self.path[self.current_wp_index]
-        d = math.sqrt((target["x"] + self.offset_x - cur_x)**2 + (target["z"] + self.offset_z - cur_z)**2)
-        for i in range(self.current_wp_index, len(self.path) - 1):
-            p1, p2 = self.path[i], self.path[i+1]
-            d += math.sqrt((p2["x"] - p1["x"])**2 + (p2["z"] - p1["z"])**2)
-        return d
-
 nav_engine = NavigationManager()
-
-#################################################################################
 
 def play_navigation_tick(current_yaw, target_yaw, screen_width=1024):
     global is_ticking
@@ -288,8 +279,6 @@ def play_navigation_tick(current_yaw, target_yaw, screen_width=1024):
         if is_ticking: 
             tick_sound_effect.stop()
             is_ticking = False
-            
-#################################################################################        
 
 def speak_offline(text):
     """Mouth: Uses Piper. Prints to terminal and speaks."""
@@ -695,6 +684,7 @@ def play_sequence(inst):
     is_speaking = False
 #---------------------------------------------------------------------------------------------------------------------
 # 🚀 8-Tag Cardinal Map (Tag ID : World Yaw)
+# 🚀 8-Tag Cardinal Map (Tag ID : World Yaw)
 TAG_MAP = {
     0: 0.0,    # North
     1: 45.0,   # North-East
@@ -762,12 +752,13 @@ def handle_april_tags(april_data, current_yaw, current_x, current_z, depth_frame
                             print(f"⚓ ANCHOR SNAPPED! {tag_name} (Tag {det.id}) locked Yaw to {int(current_yaw)}°")
                             
     return current_yaw, current_x, current_z
-
 #--------------------------------------------------------------------------------------------------------------------
 
 def run():
     global total_dist, current_yaw, last_wp_dist, recorded_path, nav_path, is_listening, is_speaking, STATE, current_x, current_z
     global mic_stream, native_rate, mic_idx, audio_callback, rec, vosk_model
+    global trigger_voice_note_record
+    trigger_voice_note_record = False
     
     # 🚀 1. INITIALIZE CORE VARIABLES
     curr_yaw, curr_pitch, curr_roll = 0.0, 0.0, 0.0
@@ -775,18 +766,24 @@ def run():
     gx, gy, gz = 0.0, 0.0, 0.0 
     last_imu_t = None
     feat_history = {} 
-    pixel_path_history = {} # 🚀 NEW: Stores the (x,y) trails for the purple lines
     motion_window = [] 
+    
+    # Calibration & Configuration
+    CALIBRATION_SCALE = 1.66 # Adjusts optical flow to physical meters
     warmup_frames = 0
-    CALIBRATION_SCALE = 1.66 
-    PERSON_CLASS_ID = 0 
-    # 1. Add q_apr queue
+    hud_dist = 0.0
     
     print("⏳ Loading Vosk...")
     vosk_model = vosk.Model(VOSK_MODEL_PATH)
     rec = vosk.KaldiRecognizer(vosk_model, 16000, json.dumps(ALLOWED_WORDS))
     
     print("⏳ Loading Hailo NPU...")
+    # Add try/except to catch hardware lockouts
+    try:
+        import hailo_platform
+        hailo_platform.pyhailort.pyhailort.VDevice.release_all_devices()
+    except: pass
+    
     target = VDevice(); hef = HEF(HEF_PATH)
     conf = ConfigureParams.create_from_hef(hef, interface=HailoStreamInterface.PCIe)
     group = target.configure(hef, conf)[0]
@@ -794,10 +791,7 @@ def run():
     out_p = OutputVStreamParams.make(group, format_type=FormatType.FLOAT32)
     input_name = hef.get_input_vstream_infos()[0].name
     
-    try: 
-        btn = Button(26, pull_up=True)
-        btn.when_pressed = trigger_listening
-        print("✅ Button 26 initialized.")
+    try: btn = Button(26, pull_up=True); btn.when_pressed = trigger_listening
     except: btn = None
     
     devices = sd.query_devices()
@@ -806,18 +800,8 @@ def run():
         if "USB" in dev['name']: mic_idx, native_rate = i, int(dev['default_samplerate']); break
             
     def audio_callback(indata, frames, time_info, status):
-        global is_listening, is_speaking, is_recording_note, voice_note_buffer, note_recording_start_time
-        
-        if is_recording_note:
-            audio_int16 = (indata.copy() * 32767).astype(np.int16)
-            voice_note_buffer.append(audio_int16)
-            # Automatic shutoff constraint from Sponge memory mapping 
-            if time.time() - note_recording_start_time >= 5.0:
-                is_recording_note = False
-            return
-            
-        if not is_listening or is_speaking: return
-        
+        global is_listening, is_speaking, is_recording_note
+        if is_recording_note or not is_listening or is_speaking: return
         try:
             mono_data = np.mean(indata, axis=1) if indata.shape[1] > 1 else indata.flatten()
             audio = (mono_data * 32768).astype('int16')
@@ -829,8 +813,9 @@ def run():
                     is_listening = False
                     threading.Thread(target=handle_voice_command, args=(cmd,), daemon=True).start()
                     rec.Reset()
-        except Exception as e:
-            pass
+        except: pass
+
+    button_was_pressed = False
 
     with dai.Device(get_pipeline()) as device:
         try:
@@ -843,22 +828,50 @@ def run():
         q_dep = device.getOutputQueue("depth", 4, False)
         q_imu = device.getOutputQueue("imu", 20, False)
         q_fea = device.getOutputQueue("feat", 4, False)
-        q_apr = device.getOutputQueue("april", 4, False) # 🚀 Add this line
+        q_apr = device.getOutputQueue("april", 4, False) # 🚀 APRILTAG QUEUE
         
         with group.activate():
             with InferVStreams(group, in_p, out_p) as pipe:
                 print("✅ SENSEY Ready."); speak_offline("System Ready.")
                 
-                # 🚀 THERE IS ONLY ONE 'WHILE TRUE' LOOP NOW
                 while True:
-        
-                    # 🚀 2. IMU FUSION & YAW SMOOTHING
+                    # 🚀 A. SAFE HARDWARE HANDOVER FOR VOICE NOTES
+                    if trigger_voice_note_record:
+                        trigger_voice_note_record = False
+                        print("🔊 Prompting: Start")
+                        subprocess.run(f'echo "Start" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True) 
+                        try:
+                            mic_stream.stop(); mic_stream.close()
+                            time.sleep(0.5) 
+                        except: pass
+                        
+                        note_filename = f"{current_route_filename}_note_{landmark_count}.wav"
+                        note_path = os.path.join(DOC_PATH, note_filename)
+                        print(f"🎙️ Recording 5s: {note_filename}")
+                        subprocess.run(['aplay', '-D', 'default', '-q', '/usr/share/sounds/alsa/Front_Center.wav'])
+                        try:
+                            subprocess.run(['arecord', '-d', '5', '-f', 'S16_LE', '-r', '44100', '-c', '1', note_path], check=True)
+                            if len(recorded_path) > 0: recorded_path[-1][4] = note_filename
+                        except Exception as e: print(f"🔴 arecord Error: {e}")
+                        subprocess.run(['aplay', '-D', 'default', '-q', '/usr/share/sounds/alsa/Front_Center.wav'])
+                        
+                        subprocess.run(f'echo "Voice note saved. Continue recording." | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
+                        try:
+                            rec.Reset()
+                            mic_stream = sd.InputStream(samplerate=native_rate, device=mic_idx, channels=1, dtype='float32', blocksize=4000, callback=audio_callback)
+                            mic_stream.start()
+                        except: pass
+                        STATE = "RECORDING"
+                        continue
+
+                    if btn and btn.is_pressed:
+                        if not button_was_pressed: button_was_pressed = True; trigger_listening()
+                    else: button_was_pressed = False
+                    rotation_cooldown = 0 # 🚀 NEW: Timer to let the camera settle after a turn
+
+                    # 🚀 1. IMU STEP DETECTOR & SMOOTH YAW
                     imuData = q_imu.tryGetAll() 
-                    
-                    ax, ay, az = 0.0, 0.0, 0.0 
-                    gx, gy, gz = 0.0, 0.0, 0.0
-                    is_stepping = False 
-                    
+                    is_stepping = False
                     for data in imuData:
                         for packet in data.packets:
                             ts = packet.acceleroMeter.timestamp.get().total_seconds()
@@ -868,189 +881,156 @@ def run():
                             ax, ay, az = packet.acceleroMeter.x, packet.acceleroMeter.z, packet.acceleroMeter.y
                             gx, gy, gz = packet.gyroscope.x, packet.gyroscope.z, packet.gyroscope.y
                             
+                            accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
+                            if abs(accel_mag - 9.81) > 0.25: is_stepping = True
+
                             current_yaw -= (gz * (180.0 / math.pi) * dt)
                             curr_pitch = 0.98 * (curr_pitch + gx * (180.0/math.pi) * dt) + 0.02 * math.degrees(math.atan2(ay, math.sqrt(ax**2 + az**2)))
                             curr_roll = 0.98 * (curr_roll + gy * (180.0/math.pi) * dt) + 0.02 * math.degrees(math.atan2(ax, az))
                             current_yaw = (current_yaw + 180) % 360 - 180
                             smooth_yaw = (0.8 * smooth_yaw) + (0.2 * current_yaw)
-                            
-                            # STEP DETECTION
-                            accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
-                            if abs(accel_mag - 9.81) > 0.2: 
-                                is_stepping = True
 
-                    
-                    # 🚀 3. FETCH SENSOR FRAMES
+                    # 🚀 2. FETCH SENSOR FRAMES
                     rgb_isp = q_isp.get().getCvFrame()
                     rgb_pre = q_pre.get().getCvFrame() 
                     depth_raw = q_dep.get().getFrame()
                     fea_data = q_fea.get().trackedFeatures
-                    
-                    # 🚀 NEW: FETCH APRILTAGS & APPLY SNAP
+
+                    # 🚀 4. APRILTAG LOCALIZATION (Corrects IMU drift & Draws Boxes)
                     april_in = q_apr.tryGet()
                     if april_in:
                         current_yaw, current_x, current_z = handle_april_tags(
                             april_in, current_yaw, current_x, current_z, depth_raw, rgb_isp
                         )
-                        
-                    # 🚀 4. AI INFERENCE (Masking)
+
+                    # 🚀 4. RUN AI FIRST (To get masking boxes)
                     res = pipe.infer({input_name: np.expand_dims(rgb_pre, axis=0)})
                     raw_dets = list(res.values())[0]
+                    
                     active_boxes = []
                     if len(raw_dets) > 0:
                         for class_list in (raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
                             for det in class_list:
-                                if len(det) >= 5 and det[4] > 0.45:
+                                if len(det) >= 5 and det[4] > 0.4:
                                     ymin, xmin, ymax, xmax = det[:4]
                                     active_boxes.append([int(xmin*1344), int(ymin*1008), int(xmax*1344), int(ymax*1008)])
 
-                    # 🚀 5. MOTION-FILTERED PEDOMETER 
+                    # 🚀 5. THE NOISE-CANCELLING PEDOMETER
+                   # 🚀 4. THE NOISE-CANCELLING PEDOMETER
                     deltas = []
-                    is_rotating = abs(gz) > 0.1 or abs(gx) > 0.1
                     
-                    # Track which IDs are currently visible to clean up old ones
-                    current_feat_ids = set()
+                    # 🚀 THE FIX: ROTATION COOLDOWN
+                    # If we are actively twisting, reset the cooldown timer to 5 frames
+                    if abs(gz) > 0.05 or abs(gx) > 0.05 or abs(gy) > 0.05:
+                        rotation_cooldown = 5 
+                    
+                    # If the timer is active, we consider the camera "still rotating / settling"
+                    if rotation_cooldown > 0:
+                        is_rotating = True
+                        rotation_cooldown -= 1
+                    else:
+                        is_rotating = False
 
+                    # Only process features if the camera is completely stable
                     if not is_rotating:
                         for f in fea_data:
-                            current_feat_ids.add(f.id)
-                            
                             x, y = int(f.position.x), int(f.position.y)
                             dx, dy = int(x * 1344/640), int(y * 1008/480)
                             
+                            cv2.circle(rgb_isp, (dx, dy), 2, (0, 255, 255), -1)
+                            
                             if 0 <= dy < 1008 and 0 <= dx < 1344:
-                                # --- DYNAMIC MASKING ---
-                                is_on_person = False
-                                if len(raw_dets) > 0:
-                                    for class_id, class_list in enumerate(raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
-                                        if class_id == PERSON_CLASS_ID:
-                                            for det in class_list:
-                                                if len(det) >= 5 and det[4] > 0.5:
-                                                    ymin, xmin, ymax, xmax = det[:4]
-                                                    if (xmin*1344) <= dx <= (xmax*1344) and (ymin*1008) <= dy <= (ymax*1008):
-                                                        is_on_person = True; break
-                                        if is_on_person: break
-                                
-                                if is_on_person: continue # Skip points on moving students
+                                is_on_obj = any(b[0]<=dx<=b[2] and b[1]<=dy<=b[3] for b in active_boxes)
+                                if is_on_obj: continue 
 
-                                # 🚀 LUXONIS VISUALIZER: The Deque Trail Logic
-                                if f.id not in pixel_path_history:
-                                    # Create a queue that automatically deletes points older than 10 frames
-                                    pixel_path_history[f.id] = deque(maxlen=10)
-                                
-                                # Add current position to the history
-                                pixel_path_history[f.id].append((dx, dy))
-                                
-                                # Draw the purple trail
-                                path = list(pixel_path_history[f.id])
-                                for i in range(len(path) - 1):
-                                    cv2.line(rgb_isp, path[i], path[i+1], (200, 0, 200), 1, cv2.LINE_AA)
-                                
-                                # Draw the solid red dot at the head of the trail
-                                cv2.circle(rgb_isp, (dx, dy), 2, (0, 0, 255), -1, cv2.LINE_AA)
-
-                                # --- PEDOMETER MATH (Completely separate from drawing) ---
                                 z = depth_raw[dy, dx] / 1000.0
-                                if 0.8 < z < 8.0:
+                                
+                                if 0.5 < z < 8.0:
                                     if f.id in feat_history:
                                         d_z = feat_history[f.id] - z
                                         if abs(d_z) < 0.40: deltas.append(d_z)
                                     feat_history[f.id] = z
-                    
-                    # 🧹 CLEANUP: Delete trails and history for points that left the screen
-                    old_ids = set(pixel_path_history.keys()) - current_feat_ids
-                    for old_id in old_ids:
-                        del pixel_path_history[old_id]
-                        if old_id in feat_history:
-                            del feat_history[old_id]
-                    
-                    # 🚀 APPLY PEDOMETER MATH (Step Gate)
-                    # We check: Is the teacher physically moving? (is_stepping is defined in IMU loop)
-                    if deltas and is_stepping:
-                        avg_step = np.median(deltas)
-                        # Forward-Only Gate
-                        if avg_step > 0.005:
-                            total_dist += (avg_step * CALIBRATION_SCALE)
-                            rad_yaw = math.radians(current_yaw)
-                            current_x = total_dist * math.sin(rad_yaw)
-                            current_z = total_dist * math.cos(rad_yaw)
-                            
-                    # 🚀 5. CLEW RECORDING LOGIC (Distance & Yaw Simplification)
+                                
+                    if len(feat_history) > 500: feat_history.clear()
+
+                    frame_move = sum(deltas) / len(deltas) if deltas else 0.0
+                    motion_window.append(frame_move)
+                    if len(motion_window) > 10: motion_window.pop(0)
+                    smooth_move = sum(motion_window) / len(motion_window)
+
+                    # 🚀 WARM-UP & ACCURATE MATH GATE
+                    if warmup_frames < 30:
+                        warmup_frames += 1
+                        total_dist = 0.0 
+                    elif smooth_move > 0.005 and is_stepping: 
+                        actual_step = smooth_move * CALIBRATION_SCALE
+                        total_dist += actual_step
+                        rad_yaw = math.radians(current_yaw)
+                        current_x += actual_step * math.sin(rad_yaw)
+                        current_z += actual_step * math.cos(rad_yaw)
+                        cv2.putText(rgb_isp, "WALKING >>", (1100, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+                    # 🚀 6. RECORDING BREADCRUMBS
                     if STATE == "RECORDING":
-                        # Ensure we have at least one start point
                         if len(recorded_path) > 0:
                             last_p = recorded_path[-1]
                             dist_from_last = math.sqrt((current_x - last_p[0])**2 + (current_z - last_p[1])**2)
-                            
-                            # Calculate Yaw change correctly (-180 to 180)
                             yaw_change = abs((current_yaw - last_p[3] + 180) % 360 - 180)
-                            
-                            # 🚀 BREADCRUMB RULE: Only save if significant movement
-                            if dist_from_last > 0.6 or yaw_change > 20:
-                                # Save: [X, Z, Label, Yaw, Note]
+                            if dist_from_last > 0.5 or yaw_change > 20:
                                 recorded_path.append([current_x, current_z, "path", current_yaw, ""])
-                                print(f"📍 Breadcrumb saved. Total: {len(recorded_path)}")
-                                
 
-                    # 🚀 6. NAVIGATION LOGIC (Only runs when NAVIGATING)
+                    # 🚀 7. NAVIGATION & 3-ZONE SAFETY SHIELD
                     if STATE == "NAVIGATING":
-                        # DYNAMIC SAFETY OVERRIDE
                         path_blocked = False
                         critical_warning = ""
-                        
-                        global is_ticking # 🚀 Force explicit inheritance here locally!
+                        WIDTH, HEIGHT = 1344, 1008
+                        ZONE_AREA = (WIDTH / 3) * HEIGHT
                         
                         if len(raw_dets) > 0:
-                            for class_list in (raw_dets[0] if isinstance(raw_dets, list) else raw_dets):
-                                for det in class_list:
-                                    if len(det) >= 5 and det[4] > 0.45:
-                                        ymin, xmin, ymax, xmax = det[:4]
-                                        cx = (xmin + xmax) / 2
-                                        sample_y, sample_x = int((ymin+ymax)/2*1008), int(cx*1344)
-                                        sample_y = max(0, min(1007, sample_y))
-                                        sample_x = max(0, min(1343, sample_x))
-                                        obj_z = depth_raw[sample_y, sample_x] / 1000.0
-                                        
-                                        if 0.1 < obj_z < 0.6:
+                            detections_list = raw_dets[0] if isinstance(raw_dets, list) else raw_dets
+                            for det in detections_list:
+                                if len(det) >= 5 and det[4] > 0.45: 
+                                    ymin, xmin, ymax, xmax = det[:4]
+                                    x1, y1, x2, y2 = int(xmin*WIDTH), int(ymin*HEIGHT), int(xmax*WIDTH), int(ymax*HEIGHT)
+                                    box_area = (x2 - x1) * (y2 - y1)
+                                    fill_ratio = box_area / ZONE_AREA
+                                    
+                                    cx = (xmin + xmax) / 2
+                                    obj_z = depth_raw[int((ymin+ymax)/2*HEIGHT), int(cx*WIDTH)] / 1000.0
+                                    label_name = LABELS[int(det[5])] if len(det) > 5 else "Object"
+
+                                    # ZONE 1/2: LEFT/RIGHT Warning
+                                    if fill_ratio > 0.5 and obj_z < 0.5:
+                                        if cx < 0.33: 
+                                            audio_queue.put({"type": "text", "msg": f"{label_name} is very close on your front left."}); break
+                                        elif cx > 0.66:
+                                            audio_queue.put({"type": "text", "msg": f"{label_name} is very close on your front right."}); break
+
+                                    # ZONE 3: CENTER Blocked!
+                                    if 0.33 < cx < 0.66:
+                                        if obj_z < 0.7 or fill_ratio > 0.5:
                                             path_blocked = True
-                                            if cx < 0.33: critical_warning = "Object very close on left."
-                                            elif cx > 0.66: critical_warning = "Object very close on right."
-                                            else: critical_warning = "Object directly in front. Stop."
-                                            break
-                                        elif 0.33 < cx < 0.66 and 0.6 <= obj_z < 1.2:
-                                            path_blocked = True
-                                            critical_warning = "Path blocked ahead."
+                                            critical_warning = f"{label_name} blocks your path."
                                             break
                         
                         if path_blocked:
-                            if is_ticking:
-                                tick_sound_effect.stop()
-                                is_ticking = False
-                            if not is_speaking:
-                                # We enforce an instant warning dump on an imminent threat without wait buffering 
-                                threading.Thread(target=speak_offline, args=(critical_warning,), daemon=True).start()
+                            if is_ticking: tick_sound_effect.stop(); is_ticking = False
+                            if audio_queue.empty(): audio_queue.put({"type": "text", "msg": critical_warning})
                         else:
-                            if not is_speaking:
-                                inst = nav_engine.get_instruction(current_x, current_z, current_yaw)
-                                
-                                if inst:
-                                    # Since earlier revisions pushed output handling as nested strings directly instead of distinct subdictionaries here
-                                    audio_queue.put({"type": "text", "msg": inst})
-
+                            inst = nav_engine.get_instruction(current_x, current_z, current_yaw)
+                            if inst: audio_queue.put({"type": "text", "msg": inst})
+                            hud_dist = nav_engine.distance_to_wp
                             play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
 
                     processed = inference_result_handler(
                         rgb_isp, raw_dets, LABELS, CONFIG_DATA, 
                         vio_data=(total_dist, smooth_yaw, curr_pitch, curr_roll), 
                         target_yaw=nav_engine.target_yaw if STATE == "NAVIGATING" else None, 
-                        target_dist=nav_engine.distance_to_wp if STATE == "NAVIGATING" else None,
+                        target_dist=hud_dist if STATE == "NAVIGATING" else None,
                         depth_frame=depth_raw, state_text=STATE
                     )
-                    
-                    # 🚀 RENDER UI
                     cv2.imshow("SENSEY 6-DOF AR Navigator", cv2.resize(processed, (1024, 768)))
                     if cv2.waitKey(1) == ord('q'): break
-                    
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
