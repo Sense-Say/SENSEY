@@ -98,28 +98,29 @@ audio_queue = queue.Queue()
 
 # 🚀 THE SINGLE-THREADED AUDIO MANAGER (No more aplay, no more busy errors)
 def audio_worker():
-    """🚀 SINGLE-THREADED AUDIO MANAGER (Using paplay)"""
+    """🚀 THE SINGLE-THREADED AUDIO MANAGER (Uses custom .wav files)"""
     while True:
         cmd = audio_queue.get()
         if cmd['type'] == 'text':
-            
             print(f"\n[SPEECH SYSTEM] 🔊: {cmd['msg']}\n")
-            
-            # 🚀 FIX: Changed to paplay with proper raw formats
             cmd_string = f'echo "{cmd["msg"]}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | paplay --raw --format=s16le --rate=22050 --channels=1'
             subprocess.run(cmd_string, shell=True)
             
         elif cmd['type'] == 'wav':
-            subprocess.run(['paplay', cmd['path']])
+            # Play a specific voice note file via pygame (non-blocking)
+            if os.path.exists(cmd['path']):
+                sound = pygame.mixer.Sound(cmd['path'])
+                sound.play()
+                time.sleep(sound.get_length())
             
         elif cmd['type'] == 'beep':
+            # 🚀 FIX: Plays your custom recording_notes.wav
             if start_beep_sound: 
                 start_beep_sound.play()
                 time.sleep(start_beep_sound.get_length())
-            else:
-                subprocess.run(['paplay', '/usr/share/sounds/alsa/Front_Center.wav'])
                 
         elif cmd['type'] == 'arrival':
+            # 🚀 FIX: Plays your custom arrived_destination.wav
             if arrival_sound:
                 arrival_sound.play()
                 time.sleep(arrival_sound.get_length())
@@ -491,47 +492,36 @@ def handle_voice_command(cmd):
 
     # ---------------- THREAD SAFE 5S WAV NOTES ---------------- #
     elif STATE == "CONFIRM_NOTE":
-        import wave, pyaudio
         if "yes" in cmd or "correct" in cmd:
             STATE = "RECORDING_NOTE"
-            is_recording_note = True 
-
+            
+            # 1. Prompt "Start"
             print("🔊 Prompting: Start")
-            subprocess.run(f'echo "Start" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True) 
-
+            cmd_start = f'echo "Start" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | paplay --raw --format=s16le --rate=22050 --channels=1'
+            subprocess.run(cmd_start, shell=True) 
+            
+            # 2. 🔔 PLAY START BEEP (via queue)
+            audio_queue.put({"type": "beep"})
+            time.sleep(1.0)
+            
+            # 3. RECORD
             note_filename = f"{current_route_filename}_note_{landmark_count}.wav"
             note_path = os.path.join(DOC_PATH, note_filename)
             
-            CHUNK, FORMAT, CHANNELS, RATE, RECORD_SECS = 1024, pyaudio.paInt16, 1, 44100, 5
-            audio = pyaudio.PyAudio(); frames_buffer = []
-
-            try:
-                subprocess.run(['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'])
-                stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK, input_device_index=mic_idx)
-                for _ in range(0, int(RATE / CHUNK * RECORD_SECS)):
-                    data = stream.read(CHUNK, exception_on_overflow=False)
-                    frames_buffer.append(data)
-                
-                stream.stop_stream(); stream.close(); audio.terminate()
-                subprocess.run(['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'])
-
-                waveFile = wave.open(note_path, 'wb')
-                waveFile.setnchannels(CHANNELS); waveFile.setsampwidth(audio.get_sample_size(FORMAT))
-                waveFile.setframerate(RATE); waveFile.writeframes(b''.join(frames_buffer)); waveFile.close()
-                if len(recorded_path) > 0: recorded_path[-1][4] = note_filename
-            except Exception as e:
-                print(f"🔴 Note fail: {e}")
-                try: audio.terminate()
-                except: pass
-
-            subprocess.run(f'echo "Voice note saved. Continue recording." | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | aplay -r 22050 -f S16_LE -t raw > /dev/null 2>&1', shell=True)
-
-            rec.Reset()
-            is_recording_note = False 
+            # Perform recording
+            recording = sd.rec(int(5.0 * 44100), samplerate=44100, channels=1, dtype='int16')
+            sd.wait()
+            import scipy.io.wavfile as wav
+            wav.write(note_path, 44100, recording)
+            
+            if len(recorded_path) > 0: recorded_path[-1][4] = note_filename
+            
+            # 4. 🔔 PLAY END BEEP (via queue)
+            audio_queue.put({"type": "beep"})
+            time.sleep(1.0)
+            
+            speak_offline("Voice note saved. Continue recording.")
             STATE = "RECORDING"
-        else:
-            STATE = "RECORDING"
-            speak_offline("Continuing recording.")
 
     # ---------------- OPERATIONAL RECORDING ---------------- #
     elif STATE == "RECORDING":
