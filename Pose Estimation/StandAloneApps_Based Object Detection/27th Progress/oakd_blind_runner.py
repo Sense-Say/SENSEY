@@ -64,6 +64,9 @@ total_dist, current_yaw, last_wp_dist, current_x, current_z = 0.0, 0.0, 0.0, 0.0
 recorded_path, nav_path = [], []
 current_route_filename, landmark_count, pending_command, previous_state = "", 0, "", "IDLE"
 
+pending_tag_scan = "" # 🚀 NEW: Tracks what we are waiting to scan ("start", "finish", or "navigate")
+scanned_tag_id = None # 🚀 NEW: Stores the ID of the tag we just looked at
+
 # 🚀 ALIAS/MAPPING VARS
 pending_route_key = ""    # Will store e.g., 'destination_1'
 pending_route_alias = ""  # Will store e.g., 'front door to desk'
@@ -100,10 +103,12 @@ audio_queue = queue.Queue()
 
 # 🚀 THE SINGLE-THREADED AUDIO MANAGER (No more aplay, no more busy errors)
 def audio_worker():
-    """🚀 THE SINGLE-THREADED AUDIO MANAGER (Uses custom .wav files)"""
+    """🚀 THE SINGLE-THREADED AUDIO MANAGER: Prints cleanly before playing."""
     while True:
         cmd = audio_queue.get()
+        
         if cmd['type'] == 'text':
+            # 🚀 Cleanly prints exactly what Piper is about to say
             print(f"\n[SPEECH SYSTEM] 🔊: {cmd['msg']}\n")
             cmd_string = f'echo "{cmd["msg"]}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw | paplay --raw --format=s16le --rate=22050 --channels=1'
             subprocess.run(cmd_string, shell=True)
@@ -111,29 +116,27 @@ def audio_worker():
         elif cmd['type'] == 'wav':
             # Play a specific voice note file via pygame (non-blocking)
             if os.path.exists(cmd['path']):
+                print(f"\n[AUDIO SYSTEM] 🎵: Playing {os.path.basename(cmd['path'])}\n")
                 sound = pygame.mixer.Sound(cmd['path'])
                 sound.play()
                 time.sleep(sound.get_length())
             
         elif cmd['type'] == 'beep':
-            # 🚀 FIX: Plays your custom recording_notes.wav
             if start_beep_sound: 
                 start_beep_sound.play()
                 time.sleep(start_beep_sound.get_length())
                 
         elif cmd['type'] == 'arrival':
-            # 🚀 FIX: Plays your custom arrived_destination.wav
             if arrival_sound:
                 arrival_sound.play()
                 time.sleep(arrival_sound.get_length())
         
         elif cmd['type'] == 'tag_chime':
             # 🚀 Play the confirmation chime when a tag is scanned
-            chime_path = "/home/raspberrypi/TTS-STT-AUDIO/tag_voice_notes.wav"
+            chime_path = "/home/raspberrypi/TTS-STT-AUDIO/tag_voice_notes01.wav"
             if os.path.exists(chime_path):
                 sound = pygame.mixer.Sound(chime_path)
                 sound.play()
-                # We don't sleep here so it acts as a background chime
                 
         audio_queue.task_done()
 
@@ -148,75 +151,48 @@ class NavigationManager:
         self.target_yaw = 0.0
         self.distance_to_wp = 0.0
         self.offset_x, self.offset_z, self.offset_yaw = 0.0, 0.0, 0.0
+        self.stride_length = 0.33
 
     def load_path(self, path_data):
-        """🚀 CLEW AUTO-TURN LOGIC"""
-        raw_nodes = []
+        """🚀 PURE NODE-TO-NODE LOGIC: Ignores all 'path' breadcrumbs."""
+        self.path = []
         for p in path_data:
             label = str(p[2]).lower()
-            node_type = "ANCHOR" if ("point" in label or "destination" in label or "start" in label) else "PATH"
-            raw_nodes.append({
-                "x": p[0], "z": p[1], "type": node_type, "label": p[2], 
-                "yaw": p[3] if len(p) > 3 else 0.0,
-                "note": p[4] if len(p) > 4 else "",
-                "total_dist": p[5] if len(p) > 5 else 0.0 
-            })
+            if "point" in label or "destination" in label or "start" in label:
+                self.path.append({
+                    "x": p[0], "z": p[1], "type": "ANCHOR", "label": p[2], 
+                    "yaw": p[3] if len(p) > 3 else 0.0,
+                    "note": p[4] if len(p) > 4 else "",
+                    "total_dist": p[5] if len(p) > 5 else 0.0 
+                })
         
-        self.path = [raw_nodes[0]] 
-        for i in range(1, len(raw_nodes) - 1):
-            prev, curr, next_n = raw_nodes[i-1], raw_nodes[i], raw_nodes[i+1]
-            
-            # Distance from previous saved point
-            seg_dist = math.sqrt((curr['x'] - self.path[-1]['x'])**2 + (curr['z'] - self.path[-1]['z'])**2)
-            
-            # 🚀 THE FIX: Ignore points that are physically in the exact same spot!
-            # If the distance is less than 10cm, it's just a "Turn-in-place" breadcrumb.
-            if seg_dist < 0.1 and curr['note'] == "" and curr['type'] == "PATH":
-                continue
-
-            angle1 = math.atan2(curr['x'] - prev['x'], curr['z'] - prev['z'])
-            angle2 = math.atan2(next_n['x'] - curr['x'], next_n['z'] - curr['z'])
-            diff = abs(math.degrees(angle2 - angle1 + math.pi) % 360 - 180)
-            
-            if seg_dist > 0.6 or diff > 30 or curr['note'] != "":
-                self.path.append(curr)
-        
-        self.path.append(raw_nodes[-1]) 
         self.active = True
+        # 🚀 REVERSE FIX: Start at Index 1 so we don't 'arrive' at our starting spot instantly
         self.current_wp_index = 1 if len(self.path) > 1 else 0
         self.offset_x, self.offset_z, self.offset_yaw = 0, 0, 0
 
-    def get_instruction(self, cur_x, cur_z, cur_yaw, is_on_demand=False):
+    def get_instruction(self, cur_x, cur_z, cur_yaw, current_total_dist, is_on_demand=False):
         global STATE
         if not self.active or self.current_wp_index >= len(self.path): return None
         
         target = self.path[self.current_wp_index]
         tx, tz = target["x"] + self.offset_x, target["z"] + self.offset_z
-        self.distance_to_wp = math.sqrt((tx - cur_x)**2 + (tz - cur_z)**2)
+        
+        # 🚀 THE FIX: Use Odometer for remaining distance logic
+        # This compares the JSON's goal with your actual physical footsteps
+        self.distance_to_wp = abs(target["total_dist"] - current_total_dist)
         
         # HUD YAW LOCK
         if self.distance_to_wp > 0.1:
-            self.target_yaw = (math.degrees(math.atan2(tx - cur_x, tz - cur_z)) + self.offset_yaw) % 360
+            self.target_yaw = (target["yaw"] + self.offset_yaw) % 360
 
         if is_on_demand:
-            # 🚀 ON DEMAND: Calculate the FULL distance to the next Anchor
-            total_dist = self.distance_to_wp
-            next_idx = self.current_wp_index
-            prev_x, prev_z = tx, tz
+            # 🚀 THE FIX: 'Update' now tells you the ACTUAL remaining distance
+            dist_str = f"{self.distance_to_wp:.2f}"
             
-            for i in range(self.current_wp_index + 1, len(self.path)):
-                p = self.path[i]
-                p_x, p_z = p["x"] + self.offset_x, p["z"] + self.offset_z
-                total_dist += math.sqrt((p_x - prev_x)**2 + (p_z - prev_z)**2)
-                prev_x, prev_z = p_x, p_z
-                if p["type"] == "ANCHOR":
-                    next_idx = i
-                    break
-                    
-            turn_err = (self.target_yaw - cur_yaw + 180) % 360 - 180
-            dist_str = f"{total_dist:.2f}"
+            next_anchor_yaw = (target["yaw"] + self.offset_yaw) % 360
+            turn_err = (next_anchor_yaw - cur_yaw + 180) % 360 - 180
             
-            # 🚀 STRICT 4-RULE PHRASING (On Demand)
             if abs(turn_err) <= 5:
                 return f"Walk straight for {dist_str} meters."
             elif turn_err < -5 and turn_err >= -174:
@@ -229,8 +205,8 @@ class NavigationManager:
         # Arrival at Node (Threshold 0.45m)
         if self.distance_to_wp < 0.45:
             node_label = target['label']
-            node_type = target['type']
-            note = target['note']
+            # The Yaw of the node we just reached
+            arrived_node_yaw = (target["yaw"] + self.offset_yaw) % 360
             
             self.current_wp_index += 1
             
@@ -241,51 +217,42 @@ class NavigationManager:
                 audio_queue.put({"type": "text", "msg": "Arrived at destination."})
                 return None
             
-            if node_type == "ANCHOR" or note:
-                audio_queue.put({"type": "beep"})
-                audio_queue.put({"type": "text", "msg": f"Reached {node_label}."})
-                if note and note.endswith(".wav"):
-                    audio_queue.put({"type": "wav", "path": os.path.join(DOC_PATH, note)})
-                
-                # 🚀 THE FIX: Calculate distance using the 1D total_dist tracker
-                next_dist = 0.0
-                next_yaw = cur_yaw
-                
-                # Current node we just arrived at
-                current_node_dist = target["total_dist"]
-                
-                for i in range(self.current_wp_index, len(self.path)):
-                    p = self.path[i]
-                    if p["type"] == "ANCHOR" or i == len(self.path) - 1:
-                        # 🚀 Exact walking distance!
-                        next_dist = p["total_dist"] - current_node_dist 
-                        
-                        p_x, p_z = p["x"] + self.offset_x, p["z"] + self.offset_z
-                        next_yaw = (p["yaw"] + self.offset_yaw) % 360 if p["type"] == "ANCHOR" else math.degrees(math.atan2(p_x - tx, p_z - tz)) % 360
-                        break
-                
-                turn_err = (next_yaw - cur_yaw + 180) % 360 - 180
-                dist_str = f"{next_dist:.2f}"
-                
-                # 🚀 STRICT 4-RULE PHRASING (Upon Arrival)
-                if abs(turn_err) <= 5:
-                    final_msg = f"Walk straight for {dist_str} meters."
-                elif turn_err < -5 and turn_err >= -174:
-                    final_msg = f"Turn {int(abs(turn_err))} degrees to the left side and walk {dist_str} meters."
-                elif turn_err > 5 and turn_err <= 174:
-                    final_msg = f"Turn {int(turn_err)} degrees to the right side and walk {dist_str} meters."
-                else:
-                    final_msg = f"Turn behind you and walk {dist_str} meters."
-                
-                audio_queue.put({"type": "text", "msg": final_msg})
+            # Landmark Arrival sequence
+            audio_queue.put({"type": "beep"})
+            audio_queue.put({"type": "text", "msg": f"Reached {node_label}."})
+            
+            if target['note'] and target['note'].endswith(".wav"):
+                audio_queue.put({"type": "wav", "path": os.path.join(DOC_PATH, target['note'])})
+            
+            # 🚀 LOOK AHEAD for next instruction
+            next_wp = self.path[self.current_wp_index]
+            # Odometer math for perfect accuracy
+            next_dist = abs(next_wp["total_dist"] - target["total_dist"])
+            next_yaw = (next_wp["yaw"] + self.offset_yaw) % 360
+            
+            # Calculate turn relative to the node we just left
+            turn_err = (next_yaw - arrived_node_yaw + 180) % 360 - 180
+            dist_str = f"{next_dist:.2f}"
+            
+            # 🚀 RETAINED YOUR 4-RULE PHRASING
+            if abs(turn_err) <= 5:
+                final_msg = f"Walk straight for {dist_str} meters."
+            elif turn_err < -5 and turn_err >= -174:
+                final_msg = f"Turn {int(abs(turn_err))} degrees to the left side and walk {dist_str} meters."
+            elif turn_err > 5 and turn_err <= 174:
+                final_msg = f"Turn {int(turn_err)} degrees to the right side and walk {dist_str} meters."
+            else:
+                final_msg = f"Turn behind you and walk {dist_str} meters."
+            
+            audio_queue.put({"type": "text", "msg": final_msg})
         
         return None
 
     def get_path_remaining_distance(self, current_total_dist):
-        # 🚀 THE FIX: For HUD, simply subtract where we are from where the goal is
         if not self.active or self.current_wp_index >= len(self.path): return 0.0
         target = self.path[self.current_wp_index]
-        return max(0.0, target["total_dist"] - current_total_dist)
+        # Always use absolute difference for remaining distance
+        return abs(target["total_dist"] - current_total_dist)
 
 nav_engine = NavigationManager()
 
@@ -331,84 +298,76 @@ def speak_offline(text):
 
 def execute_action(cmd):
     global STATE, recorded_path, nav_path, total_dist, current_yaw, last_wp_dist, current_route_filename, landmark_count, current_x, current_z, nav_engine
-    global pending_route_key, pending_route_alias
+    global pending_route_key, pending_route_alias, scanned_tag_id
     
     print(f"DEBUG: execute_action received '{cmd}'. Current STATE: {STATE}")
     
-    # ------------- ALIAS RECORD SAVER -------------------
+    # ------------- 1. START RECORDING (Post-Tag Scan) -------------------
     if cmd == "start_recording_dest":
         STATE = "RECORDING"
         current_route_filename = pending_route_key
         
+        # Save name alias mapping to route_map.json
         mapping = {}
         if os.path.exists(ROUTE_MAP_FILE):
             try:
                 with open(ROUTE_MAP_FILE, 'r') as f: 
                     mapping = json.load(f)
-            except Exception as e:
-                pass
+            except: pass
                 
         mapping[pending_route_key] = pending_route_alias
-        
         with open(ROUTE_MAP_FILE, 'w') as f: 
             json.dump(mapping, f, indent=4) 
 
-        # 🚀 6 Elements: [X, Z, Label, Yaw, Note, Total_Dist]
-        # We record the ACTUAL current_yaw here
-        recorded_path = [[0.0, 0.0, "start", current_yaw, "", 0.0]]
+        # 🚀 7-ELEMENT JSON INITIALIZATION
+        # [X, Z, Label, Yaw, Note, Total_Dist, Tag_ID]
+        recorded_path = [[0.0, 0.0, "start", current_yaw, "", 0.0, scanned_tag_id]]
         
-        # 🚀 THE FIX: DO NOT reset current_yaw to 0.0 here! 
-        # Keep the Global Compass intact!
-        total_dist, current_x, current_z, last_wp_dist = 0.0, 0.0, 0.0, 0.0
-        
+        total_dist, current_yaw, current_x, current_z, last_wp_dist = 0.0, 0.0, 0.0, 0.0, 0.0
         landmark_count = 0
-        speak_offline(f"Recording. Anchor set.")
+        
+        audio_queue.put({"type": "text", "msg": f"Tag {scanned_tag_id} detected. Anchor set. Start recording."})
 
-    # 🚀 FIX: Distinct 'FINISH' routing natively ignores state to properly write output
+    # ------------- 2. FINISH RECORDING (Post-Tag Scan) -------------------
     elif "finish" in cmd:
         if len(recorded_path) > 0:
-            # 🚀 Append the final destination with all 6 elements!
-            recorded_path.append([current_x, current_z, "destination", current_yaw, "", total_dist])
+            # 🚀 APPEND FINAL DESTINATION (7 Elements)
+            recorded_path.append([current_x, current_z, "destination", current_yaw, "", total_dist, scanned_tag_id])
             
             file_path = os.path.join(DOC_PATH, f"{current_route_filename}.json")
-            
             try:
                 with open(file_path, "w") as f: 
                     json.dump(recorded_path, f, indent=4) 
-                print(f"DEBUG: Successfully stored route locally to {file_path}")    
-                speak_offline("Saving last point. Recording finished.")
+                audio_queue.put({"type": "text", "msg": f"Tag {scanned_tag_id} scanned. Saving last point. Recording finished."})
             except Exception as e:
-                print(f"Error saving route: {e}")
+                print(f"Error saving: {e}")
         
-        # If we were navigating, stop it
         if STATE == "NAVIGATING":
             nav_engine.active = False
-            speak_offline("Navigation stopped.")
-            
+            audio_queue.put({"type": "text", "msg": "Navigation stopped."})
         STATE = "IDLE"
 
-    # 🚀 SEPARATE "STOP" LOGIC (CANCEL RECORDING) 
+    # ------------- 3. STOP / ABORT -------------------
     elif "stop" in cmd:
-        # 🚀 Use previous_state to know what we were actually stopping
         global previous_state
         if previous_state == "RECORDING":
-            print(f"DEBUG: Purged active pathway. Aborting active routes!")
-            speak_offline("Recording not saved.")
+            audio_queue.put({"type": "text", "msg": "Recording not saved."})
         elif previous_state == "NAVIGATING":
             nav_engine.active = False
-            speak_offline("Navigation stopped.")
-        
+            audio_queue.put({"type": "text", "msg": "Navigation stopped."})
         STATE = "IDLE"
 
+    # ------------- 4. START NAVIGATION -------------------
     elif "go to" in cmd or "navigate" in cmd:
         dest_key, _ = get_ordinal_key(cmd)
         is_reverse = "reverse" in cmd
 
         if not dest_key:
-            speak_offline("Please specify an ordinal destination.")
+            audio_queue.put({"type": "text", "msg": "Please specify a destination number."})
             STATE = "IDLE"
             return
 
+        # 🚀 DIRECT LOADING (No search loop)
         file_path = os.path.join(DOC_PATH, f"{dest_key}.json")
         if os.path.exists(file_path):
             try:
@@ -421,33 +380,34 @@ def execute_action(cmd):
                     if is_reverse:
                         nav_path.reverse()
                         audio_queue.put({"type": "text", "msg": "Reversing route. Please turn around."})
-                        # 🚀 REVERSE FIX: Set current_yaw to the EXACT OPPOSITE of the starting heading
+                        # 🚀 REVERSE YAW ALIGNMENT
                         first_node_yaw = nav_path[0][3] if len(nav_path[0]) > 3 else 0.0
                         current_yaw = (first_node_yaw + 180) % 360 - 180
                     else:
                         audio_queue.put({"type": "text", "msg": "Navigating."})
-                        # 🚀 FORWARD FIX: Set current_yaw to the exact heading recorded at the start
+                        # 🚀 FORWARD YAW ALIGNMENT
                         first_node_yaw = nav_path[0][3] if len(nav_path[0]) > 3 else 0.0
                         current_yaw = first_node_yaw
                         
                     STATE = "NAVIGATING"
-                    
-                    # 🚀 THE FIX: DO NOT reset current_yaw to 0.0 here either!
+                    # Reset Odometer and Map for a fresh start
                     total_dist, current_x, current_z = 0.0, 0.0, 0.0
                     
+                    # Load into the Math Engine
                     nav_engine.load_path(nav_path)
                     
-                    # 🚀 The first update will now always say "Walk straight" because 
-                    # we forced current_yaw to match the target_yaw!
-                    first_upd = nav_engine.get_instruction(0, 0, current_yaw, is_on_demand=True)
+                    # 🚀 TRIGGER FIRST INSTRUCTION
+                    # Passes (0,0) as start and 0.0 as current total distance
+                    first_upd = nav_engine.get_instruction(0, 0, current_yaw, 0.0, is_on_demand=True)
                     if first_upd:
                         audio_queue.put({"type": "text", "msg": first_upd})
 
             except Exception as e:
-                speak_offline("Failed to load destination data.")
+                print(f"Load Error: {e}")
+                audio_queue.put({"type": "text", "msg": "Failed to load destination data."})
         else:
             STATE = "IDLE"
-            speak_offline("Destination not found.")
+            audio_queue.put({"type": "text", "msg": "Destination not found."})
 
 def handle_voice_command(cmd):
     global STATE, pending_command, is_listening, recorded_path, landmark_count, current_x, current_z, current_yaw, previous_state
@@ -492,7 +452,15 @@ def handle_voice_command(cmd):
                 else:
                     STATE = "IDLE"
                     speak_offline("Ordinal required, like record first destination. Cancelled.")
-            else: 
+                    
+            elif "go to" in pending_command or "navigate" in pending_command:
+                # 🚀 NAVIGATE: Ask to scan tag instead of starting immediately
+                global pending_tag_scan
+                pending_tag_scan = "start_navigate"
+                STATE = "WAITING_FOR_TAG"
+                speak_offline("Turn around and scan the nearest tag in your current position.")
+                # Do NOT set is_listening=True; the camera takes over now
+            else:
                 STATE = "IDLE"
                 execute_action(pending_command)
         else: 
@@ -507,9 +475,11 @@ def handle_voice_command(cmd):
 
     elif STATE == "CONFIRM_DEST_NAME":
         if "yes" in cmd or "correct" in cmd:
-            STATE = "IDLE" 
-            pending_command = "" 
-            execute_action("start_recording_dest") 
+            # 🚀 RECORDING: Ask to scan tag before setting anchor
+            pending_tag_scan = "start_record"
+            STATE = "WAITING_FOR_TAG"
+            speak_offline("Scan the nearest tag in your position.")
+            # Do NOT set is_listening=True; the camera takes over now
         else:
             STATE = "WAIT_DEST_NAME"
             speak_offline("Please say the name for this destination again.")
@@ -518,7 +488,14 @@ def handle_voice_command(cmd):
     # ---------------- FINISH WORKFLOW STATES ---------------- #
     elif STATE == "CONFIRM_FINISH":
         if "yes" in cmd or "correct" in cmd: 
-            execute_action(pending_command)
+            if pending_command == "finish":
+                # 🚀 FINISHING: Ask to scan tag before saving the JSON
+                pending_tag_scan = "finish_record"
+                STATE = "WAITING_FOR_TAG"
+                speak_offline("Scan the nearest tag in your current position.")
+            else:
+                # If they were just saying "Stop" to cancel something, run it normally
+                execute_action(pending_command)
         else: 
             STATE = previous_state
             speak_offline("Resuming.")
@@ -558,7 +535,7 @@ def handle_voice_command(cmd):
     # ---------------- OPERATIONAL NAVIGATING ---------------- #
     elif STATE == "NAVIGATING":
         if "update" in cmd:
-            status = nav_engine.get_instruction(current_x, current_z, current_yaw, is_on_demand=True)
+            status = nav_engine.get_instruction(current_x, current_z, current_yaw, total_dist, is_on_demand=True)
             if status: speak_offline(status)
         elif "pause" in cmd:
             STATE = "PAUSED"; speak_offline("Navigation paused.")
@@ -633,7 +610,7 @@ def get_pipeline():
     april = p.create(dai.node.AprilTag)
     april.initialConfig.setFamily(dai.AprilTagConfig.Family.TAG_36H11)
     left.out.link(april.inputImage) 
-    
+
     # XLinkOuts
     x_isp = p.create(dai.node.XLinkOut); x_isp.setStreamName("isp"); cam.isp.link(x_isp.input)
     x_pre = p.create(dai.node.XLinkOut); x_pre.setStreamName("pre"); cam.preview.link(x_pre.input)
@@ -680,8 +657,8 @@ TAG_MAP = {
     2: 90.0,     # East (Right Wall)
     3: 135.0,    # South-East
     4: 180.0,    # South (Back Door) - Can be 180 or -180
-    5: -135.0,   # South-West (Previously 225.0)
-    6: -90.0,    # West (Left Wall) (Previously 270.0)
+    6: -135.0,   # South-West (Previously 225.0)
+    5: -90.0,    # West (Left Wall) (Previously 270.0)
     7: -45.0     # North-West (Previously 315.0)
 }
 
@@ -697,27 +674,34 @@ TAG_NAMES = {
     7: "North-West"
 }
 
-def handle_april_tags(april_data, current_yaw, current_x, current_z, depth_frame, display_frame):
+def handle_april_tags(april_data, yaw_in, current_x, current_z, depth_frame, display_frame):
     """
-    🚀 UNIFIED APRILTAG SNAP: Now returns a list of successfully snapped tags.
+    🚀 UNIFIED APRILTAG SNAP: Visual Boxes + State Interceptor + Chimes.
     """
-    l_lim = (640 * 0.33) + 50
-    r_lim = (640 * 0.66) + 50
+    global STATE, pending_tag_scan, scanned_tag_id, pending_command
+    global current_yaw # 🚀 THE FIX: Pull the global variable so we can update it instantly
+    
+    working_yaw = yaw_in # Use a local copy for the math
+    
+    width = 1344
+    l_lim = width // 4  # 336 pixels
+    r_lim = (width // 4) * 3 # 1008 pixels
     scale_x = 1344 / 640
     scale_y = 1008 / 480
     
-    snapped_tags = [] # 🚀 Track which tags were valid this frame
-
+    snapped_tags = [] 
+    
     for det in april_data.aprilTags:
         if det.id in TAG_MAP:
             cx_mono = (det.topLeft.x + det.topRight.x + det.bottomRight.x + det.bottomLeft.x) / 4
             cy_mono = (det.topLeft.y + det.topRight.y + det.bottomRight.y + det.bottomLeft.y) / 4
-            dx, dy = int(cx_mono * scale_x), int(cy_mono * scale_y)
+            dx = int(cx_mono * scale_x)
+            dy = int(cy_mono * scale_y)
             
             if 0 <= dy < 1008 and 0 <= dx < 1344:
                 z_meters = depth_frame[dy, dx] / 1000.0
                 
-                # Visualizer (Purple Box)
+                # 🟢 VISUALIZER: Draw Purple Box
                 pt1 = (int(det.topLeft.x * scale_x), int(det.topLeft.y * scale_y))
                 pt2 = (int(det.topRight.x * scale_x), int(det.topRight.y * scale_y))
                 pt3 = (int(det.bottomRight.x * scale_x), int(det.bottomRight.y * scale_y))
@@ -726,22 +710,50 @@ def handle_april_tags(april_data, current_yaw, current_x, current_z, depth_frame
                 cv2.polylines(display_frame, [pts], True, (255, 0, 255), 2)
                 
                 tag_name = TAG_NAMES.get(det.id, "Unknown")
-                cv2.putText(display_frame, f"TAG {det.id} ({tag_name}) | {z_meters:.1f}m", 
-                            (pt1[0], pt1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                label = f"TAG {det.id} ({tag_name}) | {z_meters:.1f}m"
+                cv2.putText(display_frame, label, (pt1[0], pt1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
 
                 # --- THE SNAP LOGIC ---
                 if l_lim < cx_mono < r_lim:
-                    if 0.5 < z_meters < 3.0:
+                    if 0.4 < z_meters < 4.0:
                         target_world_yaw = TAG_MAP[det.id]
-                        # Only snap if there is actual drift (> 2 degrees)
-                        if abs((target_world_yaw - current_yaw + 180) % 360 - 180) > 2.0:
-                            current_yaw = target_world_yaw
-                            print(f"⚓ ANCHOR SNAPPED! {tag_name} (Tag {det.id}) at {z_meters:.1f}m.")
                         
-                        # 🚀 Even if we didn't drift, we still "saw" it perfectly
-                        snapped_tags.append(det.id)
+                        # 🚀 1. STATE INTERCEPTOR (For Start/Finish Scans)
+                        if STATE == "WAITING_FOR_TAG":
+                            scanned_tag_id = det.id
+                            working_yaw = target_world_yaw 
                             
-    return current_yaw, current_x, current_z, snapped_tags
+                            # 🚀 THE CRITICAL FIX: Force the global yaw to update IMMEDIATELY
+                            # This guarantees execute_action saves the perfect Tag Yaw into the JSON!
+                            current_yaw = target_world_yaw 
+                            
+                            audio_queue.put({"type": "tag_chime"}) 
+                            
+                            # Execute the pending action
+                            if pending_tag_scan == "start_record":
+                                execute_action("start_recording_dest")
+                                
+                            elif pending_tag_scan == "finish_record":
+                                execute_action("finish")
+                                
+                            elif pending_tag_scan == "start_navigate":
+                                STATE = "NAVIGATING"
+                                execute_action(pending_command)
+                                pending_command = ""
+                            
+                            pending_tag_scan = ""
+                            
+                        # 🚀 2. NORMAL BACKGROUND SNAP
+                        else:
+                            # Only print/snap if there is an actual drift to correct (> 2 degrees)
+                            if abs((target_world_yaw - working_yaw + 180) % 360 - 180) > 2.0:
+                                working_yaw = target_world_yaw
+                                print(f"⚓ ANCHOR SNAPPED! Tag {det.id} locked Yaw to {working_yaw}°")
+                            
+                            # Add to the chime list
+                            snapped_tags.append(det.id)
+                            
+    return working_yaw, current_x, current_z, snapped_tags
 #--------------------------------------------------------------------------------------------------------------------
 
 def run():
@@ -841,7 +853,7 @@ def run():
         
         with group.activate():
             with InferVStreams(group, in_p, out_p) as pipe:
-                print("✅ SENSEY Ready."); speak_offline("System Ready.")
+                print("✅ SENSEY Ready."); speak_offline("Blind Navigation Mode is Ready. Press the Button to speak.")
                 
                 while True:
                     # 🚀 A. SAFE HARDWARE HANDOVER FOR VOICE NOTES
@@ -926,13 +938,10 @@ def run():
                         # 🚀 PLAY CHIME WITH 3-SECOND COOLDOWN
                         current_time = time.time()
                         for tag_id in snapped_tags:
-                            # If 3 seconds have passed since we last chimed for THIS specific tag
                             if current_time - tag_cooldowns[tag_id] > 5.0:
                                 audio_queue.put({"type": "tag_chime"})
                                 print(f"🔔 Chime played for Tag {tag_id}")
                             
-                            # Always update the timer so the 3-second cooldown keeps resetting 
-                            # as long as they are staring at it.
                             tag_cooldowns[tag_id] = current_time
 
                     # 🚀 4. AI INFERENCE & MASKING BOXES
@@ -1020,7 +1029,7 @@ def run():
                         total_dist = 0.0
                     
                     # 🚀 ONLY move if the IMU feels a step AND the net trend is forward
-                    elif is_stepping and smooth_move > 0.005: 
+                    elif is_stepping and smooth_move > 0.015: 
                         total_dist += (smooth_move * CALIBRATION_SCALE)
                         rad_yaw = math.radians(current_yaw)
                         current_x += (smooth_move * CALIBRATION_SCALE) * math.sin(rad_yaw)
@@ -1035,57 +1044,71 @@ def run():
                         # Distance is still tracked perfectly by total_dist in the background.
                         pass
 
-                    # 🚀 7. NAVIGATION & 3-ZONE SAFETY SHIELD
+                    # 🚀 7. EMERGENCY OCCLUSION SHIELD (Only for Hard Stops)
                     if STATE == "NAVIGATING":
                         path_blocked = False
                         critical_warning = ""
                         WIDTH, HEIGHT = 1344, 1008
-                        ZONE_AREA = (WIDTH / 3) * HEIGHT
+                        TOTAL_SCREEN_AREA = WIDTH * HEIGHT
                         
                         if len(raw_dets) > 0:
                             detections_list = raw_dets[0] if isinstance(raw_dets, list) else raw_dets
-                            # 🚀 FIX: Iterate properly through class_id and class_list
                             for class_id, class_list in enumerate(detections_list):
                                 for det in class_list:
                                     if len(det) >= 5:
-                                        # 🚀 FIX: Safely extract the confidence score
                                         score = float(np.array(det[4]).flatten()[0])
                                         
                                         if score > 0.45: 
                                             ymin, xmin, ymax, xmax = det[:4]
                                             x1, y1, x2, y2 = int(xmin*WIDTH), int(ymin*HEIGHT), int(xmax*WIDTH), int(ymax*HEIGHT)
+                                            
+                                            # Calculate box area
                                             box_area = (x2 - x1) * (y2 - y1)
-                                            fill_ratio = box_area / ZONE_AREA
                                             
-                                            cx = (xmin + xmax) / 2
-                                            
-                                            # Constrain bounds to prevent index errors
-                                            sample_y = max(0, min(HEIGHT-1, int((ymin+ymax)/2*HEIGHT)))
-                                            sample_x = max(0, min(WIDTH-1, int(cx*WIDTH)))
-                                            obj_z = depth_raw[sample_y, sample_x] / 1000.0
-                                            
-                                            label_name = LABELS[class_id] if class_id < len(LABELS) else "Object"
+                                            # 🚀 LENS COVERED CHECK:
+                                            # If any object (student, wall, hand) fills 85% of the screen,
+                                            # the camera is "blinded" and must stop.
+                                            if (box_area / TOTAL_SCREEN_AREA) > 0.85:
+                                                path_blocked = True
+                                                critical_warning = "Emergency stop. Camera lens is covered."
+                                                break
+                                if path_blocked: break 
 
-                                     # ZONE 3: CENTER Blocked!
-                                            if 0.33 < cx < 0.66:
-                                                if obj_z < 0.5:
-                                                    path_blocked = True
-                                                    critical_warning = f"{label_name} blocks your path."
-                                                    break
-                        
+                        # 🚀 FAILSAFE: PHYSICAL TOUCH CHECK
+                        # If AI fails to recognize the object (e.g. a plain white shirt),
+                        # we check if the center depth is closer than 30cm.
+                        if not path_blocked:
+                            center_roi = depth_raw[450:550, 622:722] # Tiny 100x100 center window
+                            avg_center_depth = np.median(center_roi) / 1000.0
+                            if 0 < avg_center_depth < 0.30: 
+                                path_blocked = True
+                                critical_warning = "Stop. Obstacle is touching the lens."
+
+                        # 🚀 FEEDBACK EXECUTION
                         if path_blocked:
-                            if is_ticking: tick_sound_effect.stop(); is_ticking = False
-                            if audio_queue.empty(): audio_queue.put({"type": "text", "msg": critical_warning})
+                            # Kill navigation sounds instantly
+                            if is_ticking: 
+                                tick_sound_effect.stop()
+                                is_ticking = False
+                            # Warn the user once
+                            if audio_queue.empty(): 
+                                audio_queue.put({"type": "text", "msg": critical_warning})
                         else:
-                            inst = nav_engine.get_instruction(current_x, current_z, current_yaw)
-                            if inst: 
-                                if isinstance(inst, dict):
-                                    audio_queue.put(inst)
-                                else:
-                                    audio_queue.put({"type": "text", "msg": inst})
+                            # Normal navigation: No more annoying "Path Blocked" voice alerts!
+                            inst = nav_engine.get_instruction(current_x, current_z, current_yaw, total_dist)
+                        
+                        if inst: 
+                            if isinstance(inst, dict):
+                                # Arrival sequence logic
+                                if inst["type"] == "text": audio_queue.put(inst)
+                                elif inst["type"] == "arrival": audio_queue.put(inst)
+                            else:
+                                # Normal update text
+                                audio_queue.put({"type": "text", "msg": inst})
                                     
-                            path_dist = nav_engine.get_path_remaining_distance(total_dist) # 🚀 FIX THIS LINE
-                            play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
+                        # Update the HUD distance using the same odometer math
+                        hud_dist = nav_engine.distance_to_wp
+                        play_navigation_tick(current_yaw, nav_engine.target_yaw, screen_width=1024)
 
                     # 🚀 9. RENDER UI (Headless Safe)
                     processed = inference_result_handler(
