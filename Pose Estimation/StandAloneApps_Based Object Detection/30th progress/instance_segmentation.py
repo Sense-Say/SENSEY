@@ -81,30 +81,39 @@ def play_navigation_tick(cur_yaw, target_yaw, screen_width=1024):
             is_ticking = False
 
 def audio_worker():
-    global is_speaking # 🚀 Pull the global variable
+    """
+    🚀 OPTIMIZED AUDIO MANAGER
+    One voice at a time. No stutter. No lag.
+    """
+    global is_speaking
     while True:
         cmd = audio_queue.get()
         
-        # Don't fall behind if the AI is spamming messages
-        if audio_queue.qsize() > 2:
-            audio_queue.task_done()
-            continue
+        # 🚀 THE "ANTI-LAG" PURGE
+        # If there is more than 1 message waiting, the info is already 'old'.
+        # Clear the queue so the teacher only hears the most recent update.
+        while audio_queue.qsize() > 0:
+            try:
+                audio_queue.get_nowait()
+                audio_queue.task_done()
+            except: break
 
-        is_speaking = True # 🚀 Lock the speaker
+        is_speaking = True
         
         if cmd['type'] == 'text':
+            # Use paplay with a specific name so we can kill it if needed
             print(f"\n[SENSEY VOICE] 🔊: {cmd['msg']}\n")
-            cmd_string = f'echo "{cmd["msg"]}" | {PIPER_EXE} --model {PIPER_MODEL} --output_raw 2>/dev/null | paplay --raw --format=s16le --rate=22050 --channels=1'
+            # 🚀 PRO TIP: We use 'stdbuf' to ensure the audio flows without buffering lag
+            cmd_string = f'echo "{cmd["msg"]}" | stdbuf -oL {PIPER_EXE} --model {PIPER_MODEL} --output_raw 2>/dev/null | paplay --raw --format=s16le --rate=22050 --channels=1'
             subprocess.run(cmd_string, shell=True)
             
         elif cmd['type'] == 'wav':
             if os.path.exists(cmd['path']):
-                print(f"\n[SENSEY AUDIO] 🎵: Playing {os.path.basename(cmd['path'])}\n")
                 sound = pygame.mixer.Sound(cmd['path'])
                 sound.play()
                 time.sleep(sound.get_length())
                 
-        is_speaking = False # 🚀 Unlock the speaker
+        is_speaking = False
         audio_queue.task_done()
 
 threading.Thread(target=audio_worker, daemon=True).start()
@@ -120,6 +129,8 @@ class ExplorationManager:
         self.pending_path_side = None # "left" or "right"
         self.dist_to_intersection = 0.0
         self.yaw_at_detection = 0.0
+        self.last_ambient_time = 0.0 # 🚀 Cooldown for 'Nearby' objects
+
 
     def analyze_floor(self, master_mask, depth_frame, cur_yaw):
         """
@@ -161,25 +172,49 @@ class ExplorationManager:
         return best_idx, depth_profile
 
     def check_intersections(self, depth_profile):
+        """🚀 HIGH PRIORITY: Path Choice Logic."""
         current_time = time.time()
-        if current_time - self.last_intersection_time < 8.0:
-            return None
+        if current_time - self.last_intersection_time < 8.0: return None
 
-        # Logic for identifying openings
+        # Logic to detect aisles (Same as before)
         left_open = max(depth_profile[0], depth_profile[1]) > 2.5
         right_open = max(depth_profile[3], depth_profile[4]) > 2.5
-        center_open = depth_profile[2] > 1.5
+        center_blocked = 0.1 < depth_profile[2] < 1.0 
         
         msg = None
-        if center_open and left_open:
-            msg = "Path opens to your left."
-        elif center_open and right_open:
-            msg = "Path opens to your right."
-            
+        if center_blocked:
+            if left_open and right_open: msg = "Wall ahead. Paths available left and right."
+            elif left_open: msg = "Wall ahead. Path available left."
+            elif right_open: msg = "Wall ahead. Path available right."
+        
         if msg:
             self.last_intersection_time = current_time
-            return msg # 🚀 Returns a STRING, not a tuple
+            return msg
+        return None
+
+    def describe_surroundings(self, detections, current_time, labels):
+        """🚀 LOW PRIORITY: Ambient awareness."""
+        global is_speaking
+        
+        # 🚀 If already talking or spoke recently, stay silent
+        if is_speaking or (current_time - self.last_ambient_time < 6.0):
+            return None
+
+        allowed_objects = {"person": "person", "chair": "chair", "dining table": "desk", "backpack": "bag"}
             
+        for det in detections:
+            if det['score'] > 0.75: # Strict confidence for clear voice
+                class_id = det['class_id']
+                label = labels[class_id]
+                if label in allowed_objects:
+                    spoken_label = allowed_objects[label]
+                    self.last_ambient_time = current_time
+                    # Determine side
+                    cx = (det['bbox'][0] + det['bbox'][2]) / 2 / 1344.0
+                    side = "left" if cx < 0.33 else ("right" if cx > 0.66 else "center")
+                    
+                    if side == "center": return f"The {spoken_label} is blocking your path."
+                    else: return f"Beware of the {spoken_label} on your {side} side."
         return None
 
     def check_user_choice(self, currrent_yaw):
@@ -201,44 +236,28 @@ class ExplorationManager:
         return None
 
     def describe_surroundings(self, detections, current_time, labels):
+        """🚀 LOW PRIORITY: Ambient awareness."""
         global is_speaking
-        if is_speaking: return None
+        
+        # 🚀 If already talking or spoke recently, stay silent
+        if is_speaking or (current_time - self.last_ambient_time < 6.0):
+            return None
 
-        allowed_objects = {
-            "person": "person", "chair": "chair", "dining table": "desk",
-            "backpack": "bag", "handbag": "bag", "suitcase": "bag"
-        }
+        allowed_objects = {"person": "person", "chair": "chair", "dining table": "desk", "backpack": "bag"}
             
         for det in detections:
-            # 🚀 FIX: Support both Dictionary and List input
-            if isinstance(det, dict):
-                score = det['score']
+            if det['score'] > 0.75: # Strict confidence for clear voice
                 class_id = det['class_id']
-                bbox = det['bbox'] # [xmin, ymin, xmax, ymax]
-            else:
-                # Fallback if it receives a raw list [xmin, ymin, xmax, ymax, score, class_id]
-                bbox = det[0:4]
-                score = det[4]
-                class_id = int(det[5])
-            
-            if score < 0.70: # Increase from 0.55 to 0.70 to stop ghost 'people'
-                continue
-            
-            if score > 0.55:
-                original_label = labels[class_id]
-                
-                if original_label in allowed_objects:
-                    spoken_label = allowed_objects[original_label]
-                    cx = (bbox[0] + bbox[2]) / 2.0
-                    norm_cx = cx / 1344.0
+                label = labels[class_id]
+                if label in allowed_objects:
+                    spoken_label = allowed_objects[label]
+                    self.last_ambient_time = current_time
+                    # Determine side
+                    cx = (det['bbox'][0] + det['bbox'][2]) / 2 / 1344.0
+                    side = "left" if cx < 0.33 else ("right" if cx > 0.66 else "center")
                     
-                    memory_key = f"{spoken_label}_{int(norm_cx > 0.33)}_{int(norm_cx > 0.66)}"
-                    
-                    if current_time - self.seen_objects.get(memory_key, 0) > 8.0:
-                        self.seen_objects[memory_key] = current_time
-                        if norm_cx < 0.33: return f"Beware of the {spoken_label} on your left side."
-                        elif norm_cx > 0.66: return f"Beware of the {spoken_label} on your right side."
-                        else: return f"The {spoken_label} is blocking your path."
+                    if side == "center": return f"The {spoken_label} is blocking your path."
+                    else: return f"Beware of the {spoken_label} on your {side} side."
         return None
 
 def inference_callback(completion_info, bindings_list, input_batch, output_queue):
@@ -398,21 +417,28 @@ def run_exploration():
                 best_zone, zone_depths = explorer.analyze_floor(master_mask, depth_frame, current_yaw)
                 
                 if STATE == "EXPLORING":
-                    # 🚀 FIX: Do NOT put 'zone_depths' into the audio_queue.
-                    # Instead, we pass it to the INTERSECTION checker which returns TEXT.
-                    path_choice_msg = explorer.check_intersections(zone_depths)
+                    # 1. Math Brain
+                    best_zone, zone_depths = explorer.analyze_floor(master_mask, depth_frame, current_yaw)
                     
+                    # 2. Check if Center is Blocked (< 0.8 meters)
+                    is_center_blocked = zone_depths[2] < 0.8 and zone_depths[2] > 0.1
+                    
+                    # 3. Intersection Logic
+                    path_choice_msg = explorer.check_intersections(zone_depths)
                     if path_choice_msg:
-                        # This will now print a clean message like: [SENSEY VOICE] 🔊: Path opens to your right.
                         audio_queue.put({"type": "text", "msg": path_choice_msg})
                     
-                    # Ambient Narration
+                    # 4. Ambient Narration
                     surr_msg = explorer.describe_surroundings(formatted_detections, time.time(), labels)
                     if surr_msg: 
                         audio_queue.put({"type": "text", "msg": surr_msg})
 
-                # 8. TICKING "MAGNET"
-                play_navigation_tick(current_yaw, explorer.target_yaw, 1024)
+                # 🚀 8. TICKING RULE
+                # If blocked, Force Stop Ticks. Otherwise, chase the Green Arrow.
+                if is_center_blocked:
+                    if is_ticking: tick_sound_effect.stop(); is_ticking = False
+                else:
+                    play_navigation_tick(current_yaw, explorer.target_yaw, 1024)
                 
                 cv2.imshow("SENSEY Exploration", cv2.resize(processed_frame, (1024, 768)))
 
@@ -428,3 +454,4 @@ if __name__ == "__main__":
         print(f"🔴 CRITICAL ERROR: {e}")
         # Stop everything. DO NOT RESTART.
         sys.exit(1)
+
